@@ -157,6 +157,7 @@ int main(void)
         for(int i=0;i<5;i++){ctl.remote_heartbeat_ms=simulated_ms;advance(250);}
         edge(10,1);advance(10);assert(!ctl.drive_commanded);
         advance(50);assert(ctl.state==IDLE_TOP&&!ctl.remote_owned&&!ctl.remote_requested);
+        advance(CONFIG_ELEVATOR_REVERSAL_MS);
         ctl.remote_requested=2;ctl.remote_heartbeat_ms=simulated_ms;
         advance(10);assert(ctl.state==MOVING_DOWN&&ctl.remote_owned&&!levels[3]&&levels[4]);
     }
