@@ -169,7 +169,9 @@ for(const [id,action] of [['up','UP'],['down','DOWN'],['stop','STOP']]){
  if(action!=='STOP'){
   $(id).addEventListener('pointerdown',e=>{
    if(isDemo)return;
-   e.preventDefault();beginHold(action);
+   e.preventDefault();
+   try{$(id).setPointerCapture(e.pointerId);}catch(_){}
+   beginHold(action);
   });
   $(id).addEventListener('keydown',e=>{
    if(!isDemo&&e.repeat===false&&(e.key===' '||e.key==='Enter')){e.preventDefault();beginHold(action);}
