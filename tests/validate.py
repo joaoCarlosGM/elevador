@@ -41,6 +41,7 @@ typedef int esp_err_t;
 #define CONFIG_ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL 1
 #define CONFIG_ELEVATOR_LIMIT_BOTTOM_ACTIVE_LEVEL 1
 #define CONFIG_ELEVATOR_BUTTON_ACTIVE_LEVEL 0
+#define CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS 600
 #define CONFIG_ELEVATOR_AUTO_UP_WAIT_MS 10000
 #ifndef CONFIG_ELEVATOR_MIN_UP_MS
 #define CONFIG_ELEVATOR_MIN_UP_MS 1000
@@ -56,12 +57,18 @@ typedef int esp_err_t;
 #define CONFIG_ELEVATOR_SAMPLE_MS 10
 #define CONFIG_ELEVATOR_ARM_HOLD_MS 3000
 #define CONFIG_ELEVATOR_AP_SSID "Elevador"
+#ifdef TEST_REMOTE
+#define CONFIG_ELEVATOR_AP_PASSWORD "teste-controle-local-2026"
+#else
 #define CONFIG_ELEVATOR_AP_PASSWORD "12345678"
+#endif
 #ifndef UNCONFIRMED
 #define CONFIG_ELEVATOR_LIMITS_CONFIRMED 1
 #endif
 #ifdef TEST_SUPERVISED
 #define CONFIG_ELEVATOR_SUPERVISED_TEST 1
+#elif defined(TEST_REMOTE)
+#define CONFIG_ELEVATOR_WEB_CONTROL_ENABLED 1
 #else
 #define CONFIG_ELEVATOR_AUTOMATIC_ENABLED 1
 #endif
@@ -135,6 +142,49 @@ int main(void)
     (void)TAG;(void)state_names;(void)fault_names;(void)fault_messages;
 #ifdef TEST_BAD_CONFIG
     assert(!configuration_valid());puts("Invalid timing configuration rejected: PASS");return 0;
+#endif
+#ifdef TEST_REMOTE
+    CASE("web mode is explicit, manual and bounded, no automatic start") {
+        assert(configuration_valid());
+        fresh(0,1,false);assert(ctl.state==IDLE_BOTTOM&&!ctl.calibration_valid);
+        advance(20000);assert(!moving()&&commands==0&&ctl.state==IDLE_BOTTOM);
+    }
+    CASE("remote up reaches limit and stops, reverse only after arriving") {
+        fresh(0,1,false);advance(500);
+        ctl.remote_requested=1;ctl.remote_heartbeat_ms=simulated_ms;
+        advance(10);assert(ctl.remote_owned&&ctl.state==MOVING_UP&&levels[3]&&!levels[4]);
+        edge(1,0);advance(50);
+        for(int i=0;i<5;i++){ctl.remote_heartbeat_ms=simulated_ms;advance(250);}
+        edge(10,1);advance(10);assert(!ctl.drive_commanded);
+        advance(50);assert(ctl.state==IDLE_TOP&&!ctl.remote_owned&&!ctl.remote_requested);
+        ctl.remote_requested=2;ctl.remote_heartbeat_ms=simulated_ms;
+        advance(10);assert(ctl.state==MOVING_DOWN&&ctl.remote_owned&&!levels[3]&&levels[4]);
+    }
+    CASE("web STOP latches fault and commands both inputs low") {
+        fresh(0,1,false);advance(500);
+        ctl.remote_requested=1;ctl.remote_heartbeat_ms=simulated_ms;
+        advance(10);assert(ctl.remote_owned);
+        ctl.remote_stop_requested=true;advance(10);
+        assert(ctl.fault==REMOTE_STOP&&ctl.state==FAULT&&!ctl.drive_commanded);
+        assert(!levels[3]&&!levels[4]&&!motor_start(true));
+        advance(1000);assert(ctl.state==FAULT&&!levels[3]&&!levels[4]);
+    }
+    CASE("loss of browser heartbeat stops motor and latches fault") {
+        fresh(0,1,false);advance(500);
+        ctl.remote_requested=1;ctl.remote_heartbeat_ms=simulated_ms;advance(10);
+        assert(ctl.remote_owned);advance(650);
+        assert(ctl.fault==REMOTE_HEARTBEAT_LOST&&ctl.state==FAULT&&!ctl.drive_commanded);
+        assert(!levels[3]&&!levels[4]);
+    }
+    CASE("unknown position or both limits forbid remote start") {
+        fresh(0,0,false);advance(100);
+        ctl.remote_requested=1;ctl.remote_heartbeat_ms=simulated_ms;advance(100);
+        assert(ctl.fault==UNKNOWN_POSITION_AT_BOOT&&!ctl.drive_commanded);
+        fresh(1,1,false);advance(100);
+        ctl.remote_requested=1;ctl.remote_heartbeat_ms=simulated_ms;advance(100);
+        assert(ctl.fault==BOTH_LIMITS_ACTIVE&&!ctl.drive_commanded);
+    }
+    printf("%d remote scenarios passed\n",cases);return 0;
 #endif
     CASE("valid configuration and reserved GPIO rejection") {
         assert(configuration_valid());assert(!valid_gpio(2));assert(!valid_gpio(8));assert(!valid_gpio(9));assert(!valid_gpio(18));assert(!valid_gpio(19));assert(!valid_gpio(12));assert(valid_gpio(20));
@@ -539,7 +589,8 @@ const assert=require('assert');
  });
  await ctrl.goto('http://control.test/');
  await ctrl.waitForFunction(()=>document.querySelector('#connection').textContent==='API CONECTADA');
- for(const id of ['up','down','stop'])assert(await ctrl.locator('#'+id).isDisabled());
+ for(const id of ['up','down'])assert(await ctrl.locator('#'+id).isDisabled());
+ assert(await ctrl.locator('#stop').isEnabled());
  assert.equal(await ctrl.locator('a[href="/dashboard"]').count(),1);
  assert(await ctrl.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await ctrl.close();
@@ -555,7 +606,7 @@ const assert=require('assert');
  assert.equal(await local.locator('#status').textContent(),'NA BASE');
  assert.equal(errors.length,0);
  await local.close();
- console.log('PASS root-only controls, disabled on device, simulated in local demo, 320/360px responsive');
+ console.log('PASS root controls: no remote motion when disabled, stop visible, demo and mobile view');
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});
 '''
@@ -586,12 +637,15 @@ def validate(output, browser):
         raise AssertionError("Removed motor pad still exists")
     assert sorted(p.name for p in (ROOT / "main").glob("*.c")) == ["main.c"]
     assert 'EMBED_TXTFILES "index.html" "control.html"' in (ROOT / "main/CMakeLists.txt").read_text()
-    assert source.count(".uri=") == 4 and source.count(".method=HTTP_GET") == 4 and "xTaskCreate" not in source
+    assert source.count(".uri=") == 7 and source.count(".method=HTTP_GET") == 4 and "xTaskCreate" not in source
     assert '.uri="/dashboard"' in source and '.uri="/"' in source
-    assert '.method=HTTP_POST' not in source
+    assert source.count(".method=HTTP_POST") == 3
+    assert all('.uri="/api/control/'+cmd+'"' in source for cmd in ("up","down","stop"))
     root_page=(ROOT / "main/control.html").read_text()
     assert all('id="' + x + '"' in root_page for x in ('up','down','stop'))
-    assert "if(!isDemo)return;" in root_page
+    assert "fetch('/api/control/'+action.toLowerCase()" in root_page
+    assert "beginHold(action)" in root_page
+    assert "window.addEventListener('blur',stopHold)" in root_page
     assert "for(const id of ['up','down','stop'])$(id).disabled=true;" in root_page
     assert "default 3" in kconfig and "default 4" in kconfig
     print("PASS minimal architecture and removal regression")
@@ -599,6 +653,7 @@ def validate(output, browser):
     control.write_text(CONTROL)
     for name, flags in [
         ("automatic", []), ("supervised", ["-DTEST_SUPERVISED"]),
+        ("web-manual", ["-DTEST_REMOTE"]),
         ("unconfirmed", ["-DUNCONFIRMED"]),
         ("invalid-timing", ["-DTEST_BAD_CONFIG", "-DCONFIG_ELEVATOR_MIN_UP_MS=0"]),
     ]:
