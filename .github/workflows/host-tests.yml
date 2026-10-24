@@ -1,0 +1,19 @@
+name: Elevador - host regression tests
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+jobs:
+  native-tests:
+    name: GPIO/NVS/HTTP regression (host mocks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run host-only checks (no physical motor)
+        run: python3 tests/validate.py
