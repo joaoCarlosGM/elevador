@@ -39,17 +39,17 @@ endmenu
 
 menu "Entradas e antirruido"
 config ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL
-    int "Nivel ativo superior (NC para GND: 1)"
-    range 0 1
-    default 1
-config ELEVATOR_LIMIT_BOTTOM_ACTIVE_LEVEL
-    int "Nivel ativo inferior (NC para GND: 1)"
-    range 0 1
-    default 1
-config ELEVATOR_BUTTON_ACTIVE_LEVEL
-    int "Nivel ativo do botao NO para GND"
+    int "Nivel ativo superior (NC para 3V3, pull-down: 0)"
     range 0 1
     default 0
+config ELEVATOR_LIMIT_BOTTOM_ACTIVE_LEVEL
+    int "Nivel ativo inferior (NC para 3V3, pull-down: 0)"
+    range 0 1
+    default 0
+config ELEVATOR_BUTTON_ACTIVE_LEVEL
+    int "Nivel ativo do botao NO para 3V3 (pull-down: 1)"
+    range 0 1
+    default 1
 config ELEVATOR_LIMIT_DEBOUNCE_MS
     int "Debounce dos fins (ms)"
     range 10 1000
