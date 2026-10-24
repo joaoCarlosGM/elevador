@@ -380,7 +380,7 @@ static void control_tick(void *arg)
         ctl.remote_stop_requested = false;
         ctl.remote_requested = 0;
         ctl.remote_block_until_ms = ctl.now_ms + CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS;
-        bool active = ctl.remote_owned && (moving() || ctl.drive_commanded);
+        bool active = moving() || ctl.drive_commanded;
         if (active) fail(REMOTE_STOP);
         else motor_brake();
         ctl.remote_owned = false;
@@ -644,7 +644,8 @@ static esp_err_t health_handler(httpd_req_t *req)
 static void wifi_event(void *arg, esp_event_base_t base, int32_t event, void *data)
 {
     (void)arg; (void)base; (void)data;
-    if (event == WIFI_EVENT_AP_STOP || event == WIFI_EVENT_AP_STADISCONNECTED) {
+    if (event == WIFI_EVENT_AP_STOP ||
+        (WEB_MODE && event == WIFI_EVENT_AP_STADISCONNECTED)) {
         portENTER_CRITICAL(&control_mux);
         ctl.remote_requested = 0; ctl.remote_stop_requested = true;
         if (event == WIFI_EVENT_AP_STOP) {
