@@ -47,6 +47,11 @@
 #else
 #define AUTOMATIC false
 #endif
+#ifdef CONFIG_ELEVATOR_WEB_CONTROL_ENABLED
+#define WEB_MODE true
+#else
+#define WEB_MODE false
+#endif
 #ifdef CONFIG_ELEVATOR_LIMITS_CONFIRMED
 #define LIMITS_CONFIRMED true
 #else
@@ -63,19 +68,22 @@ typedef enum { BOOT, NEEDS_COMMISSIONING, IDLE_TOP, IDLE_BOTTOM,
 typedef enum { NONE, BOTH_LIMITS_ACTIVE, UNKNOWN_POSITION_AT_BOOT,
     GPIO_CONFIGURATION, TRAVEL_TOO_FAST, TRAVEL_TIMEOUT, UNEXPECTED_LIMIT,
     LIMIT_SENSOR_INCONSISTENT, START_LIMIT_NOT_RELEASED,
-    NVS_OR_CALIBRATION_INVALID, AP_OR_HTTP_FAILURE, GPIO_WRITE_FAILURE } fault_t;
+    NVS_OR_CALIBRATION_INVALID, AP_OR_HTTP_FAILURE, GPIO_WRITE_FAILURE,
+    REMOTE_STOP, REMOTE_HEARTBEAT_LOST } fault_t;
 static const char *const state_names[] = {"BOOT","NEEDS_COMMISSIONING","IDLE_TOP",
     "IDLE_BOTTOM","WAIT_AUTO_UP","MOVING_UP","MOVING_DOWN","FAULT"};
 static const char *const fault_names[] = {"NONE","BOTH_LIMITS_ACTIVE",
     "UNKNOWN_POSITION_AT_BOOT","GPIO_CONFIGURATION","TRAVEL_TOO_FAST",
     "TRAVEL_TIMEOUT","UNEXPECTED_LIMIT","LIMIT_SENSOR_INCONSISTENT",
-    "START_LIMIT_NOT_RELEASED","NVS_OR_CALIBRATION_INVALID","AP_OR_HTTP_FAILURE","GPIO_WRITE_FAILURE"};
+    "START_LIMIT_NOT_RELEASED","NVS_OR_CALIBRATION_INVALID","AP_OR_HTTP_FAILURE","GPIO_WRITE_FAILURE",
+    "REMOTE_STOP","REMOTE_HEARTBEAT_LOST"};
 static const char *const fault_messages[] = {"Sem falha", "Ambos os fins ativos",
     "Posicao desconhecida no boot", "Pinos, console, senha ou tempos invalidos",
     "Destino antes do minimo fisico", "Tempo maximo excedido",
     "Fim mudou sem movimento ordenado", "Sequencia dos fins inconsistente",
     "Fim de origem nao liberou", "NVS ou calibracao invalida",
-    "Falha de AP ou HTTP; motor bloqueado", "Falha de escrita GPIO; comando nao confirmado"};
+    "Falha de AP ou HTTP; motor bloqueado", "Falha de escrita GPIO; comando nao confirmado",
+    "Parada remota; posicao requer verificacao", "Sinal web perdido durante movimento"};
 typedef struct {
     int pin, active_level, raw_level;
     bool debounced_active, initialized, edge_seen;
@@ -96,6 +104,10 @@ typedef struct {
     bool destination_pending, armed, arm_release_needed, calibration_dirty;
     bool calibration_valid, nvs_ok, web_ok, position_top, gpio_write_failed;
     bool output_known[3];
+    /* Web handlers only enqueue intents; timer is the sole owner of motor GPIO. */
+    uint8_t remote_requested; /* 0 none, 1 up, 2 down */
+    uint64_t remote_heartbeat_ms, remote_block_until_ms;
+    bool remote_owned, remote_stop_requested;
     int failed_gpio_pin, gpio_error;
     int motor_in1, motor_in2, led_level;
     uint32_t ignored_presses, last_up_ms, last_down_ms, generation;
@@ -225,7 +237,11 @@ static bool configuration_valid(void)
         min_time(true) > 0 && min_time(false) > 0 &&
         max_time(true) > min_time(true) && max_time(false) > min_time(false) &&
         CONFIG_ELEVATOR_START_RELEASE_MS < max_time(true) &&
-        CONFIG_ELEVATOR_START_RELEASE_MS < max_time(false) && !(SUPERVISED && AUTOMATIC);
+        CONFIG_ELEVATOR_START_RELEASE_MS < max_time(false) &&
+        !(SUPERVISED && AUTOMATIC) &&
+        !(WEB_MODE && (SUPERVISED || AUTOMATIC)) &&
+        (!WEB_MODE || strcmp(CONFIG_ELEVATOR_AP_PASSWORD, "12345678") != 0) &&
+        CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS >= CONFIG_ELEVATOR_SAMPLE_MS * 3;
 }
 static void IRAM_ATTR input_isr(void *arg)
 {
@@ -248,14 +264,15 @@ static bool sample(input_t *in, uint32_t debounce)
     return active;
 }
 static bool operational(void)
-{ return ctl.calibration_valid && AUTOMATIC && !SUPERVISED && LIMITS_CONFIRMED; }
+{ return LIMITS_CONFIRMED && !SUPERVISED &&
+    ((AUTOMATIC && ctl.calibration_valid) || WEB_MODE); }
 static void stationary(void)
 {
     if (ctl.top.debounced_active && ctl.bottom.debounced_active) { fail(BOTH_LIMITS_ACTIVE); return; }
     if (!ctl.top.debounced_active && !ctl.bottom.debounced_active) { fail(UNEXPECTED_LIMIT); return; }
     ctl.position_top = ctl.top.debounced_active;
     if (ctl.top.debounced_active) transition(IDLE_TOP);
-    else transition(operational() ? WAIT_AUTO_UP : NEEDS_COMMISSIONING);
+    else transition(operational() ? (AUTOMATIC ? WAIT_AUTO_UP : IDLE_BOTTOM) : NEEDS_COMMISSIONING);
 }
 /* Sole function allowed to command directional drive. Timer owner only. */
 static bool motor_start(bool up)
@@ -299,6 +316,8 @@ static void finish_travel(bool up)
         ctl.calibration_dirty = true; ++ctl.generation;
         ctl.calibration_valid = false;
     }
+    ctl.remote_owned = false;
+    ctl.remote_requested = 0; /* never auto-repeat after arriving at destination */
     transition(up ? IDLE_TOP : IDLE_BOTTOM);
     stationary();
 }
@@ -356,6 +375,25 @@ static void control_tick(void *arg)
     portENTER_CRITICAL(&control_mux);
     ctl.now_ms = clock_ms();
     if (!ctl.pins_ready) { portEXIT_CRITICAL(&control_mux); return; }
+    /* STOP and heartbeat watchdog are processed before all movement logic. */
+    if (ctl.remote_stop_requested) {
+        ctl.remote_stop_requested = false;
+        ctl.remote_requested = 0;
+        ctl.remote_block_until_ms = ctl.now_ms + CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS;
+        bool active = ctl.remote_owned && (moving() || ctl.drive_commanded);
+        if (active) fail(REMOTE_STOP);
+        else motor_brake();
+        ctl.remote_owned = false;
+    }
+    if (WEB_MODE && ctl.remote_owned && moving() &&
+        ctl.now_ms - ctl.remote_heartbeat_ms > CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS) {
+        ctl.remote_requested = 0;
+        ctl.remote_owned = false;
+        fail(REMOTE_HEARTBEAT_LOST);
+    }
+    if (WEB_MODE && ctl.remote_requested &&
+        ctl.now_ms - ctl.remote_heartbeat_ms > CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS)
+        ctl.remote_requested = 0;
     sample(&ctl.top, CONFIG_ELEVATOR_LIMIT_DEBOUNCE_MS);
     sample(&ctl.bottom, CONFIG_ELEVATOR_LIMIT_DEBOUNCE_MS);
     bool pressed = sample(&ctl.button, CONFIG_ELEVATOR_BUTTON_DEBOUNCE_MS);
@@ -388,14 +426,20 @@ static void control_tick(void *arg)
                     LIMITS_CONFIRMED && ctl.nvs_ok && ctl.web_ok) {
                     ctl.armed = true; ctl.arm_release_needed = true;
                 }
-                if (SUPERVISED && ctl.armed && !ctl.arm_release_needed && pressed)
+                if (WEB_MODE && operational() && ctl.remote_requested &&
+                    ctl.now_ms >= ctl.remote_block_until_ms &&
+                    ctl.now_ms - ctl.remote_heartbeat_ms <= CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS &&
+                    ((ctl.remote_requested == 1 && !at_top) ||
+                     (ctl.remote_requested == 2 && at_top))) {
+                    if (motor_start(ctl.remote_requested == 1)) ctl.remote_owned = true;
+                } else if (SUPERVISED && ctl.armed && !ctl.arm_release_needed && pressed)
                     motor_start(!at_top);
                 else switch (ctl.state) {
-                case IDLE_TOP: if (pressed && operational()) motor_start(false); break;
+                case IDLE_TOP: if (pressed && AUTOMATIC && operational()) motor_start(false); break;
                 case WAIT_AUTO_UP:
-                    if (operational() && ctl.now_ms - ctl.state_ms >= WAIT_MS) motor_start(true);
+                    if (AUTOMATIC && operational() && ctl.now_ms - ctl.state_ms >= WAIT_MS) motor_start(true);
                     break;
-                case IDLE_BOTTOM: stationary(); break;
+                case IDLE_BOTTOM: if (!WEB_MODE) stationary(); break;
                 default: break;
                 }
             }
@@ -560,6 +604,12 @@ static esp_err_t status_handler(httpd_req_t *req)
         "\"limits_confirmed\":%s,\"pending_save\":%s,\"up_count\":%"PRIu32",\"down_count\":%"PRIu32",\"required_cycles\":%d},",
         json_bool(SUPERVISED), json_bool(s.armed), json_bool(AUTOMATIC), json_bool(LIMITS_CONFIRMED),
         json_bool(s.calibration_dirty), s.cal.up_count, s.cal.down_count, CONFIG_ELEVATOR_REQUIRED_CYCLES);
+    json_add(&j, "\"remote\":{\"enabled\":%s,\"ready\":%s,\"heartbeat_timeout_ms\":%d},",
+        json_bool(WEB_MODE),
+        json_bool(WEB_MODE && s.fault == NONE && s.initialized && s.nvs_ok &&
+            s.web_ok && LIMITS_CONFIRMED && !s.calibration_dirty &&
+            !s.gpio_write_failed && s.pins_ready),
+        CONFIG_ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS);
     json_add(&j, "\"error\":{\"code\":\"%s\",\"message\":\"%s\",\"state\":\"%s\",\"time_ms\":%"PRIu64",\"gpio_write_failed\":%s,\"gpio_pin\":%d,\"gpio_error\":%d},\"gpio\":{",
         fault_names[s.fault], fault_messages[s.fault], state_names[s.fault_state], s.fault_ms,
         json_bool(s.gpio_write_failed), s.failed_gpio_pin, s.gpio_error);
@@ -577,7 +627,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         CONFIG_ELEVATOR_MAX_UP_MS, CONFIG_ELEVATOR_MAX_DOWN_MS);
     json_add(&j, "\"ignored_presses\":%"PRIu32",\"motor_blocked\":%s,\"refresh_ms\":%d,\"uptime_ms\":%"PRIu64"}",
         s.ignored_presses, json_bool(s.fault != NONE || !s.initialized || (!s.calibration_valid && !s.armed) ||
-        !LIMITS_CONFIRMED || (!AUTOMATIC && !SUPERVISED) || s.calibration_dirty), CONFIG_ELEVATOR_WEB_REFRESH_MS, now);
+        !LIMITS_CONFIRMED || (!AUTOMATIC && !SUPERVISED && !WEB_MODE) || s.calibration_dirty), CONFIG_ELEVATOR_WEB_REFRESH_MS, now);
     no_cache(req); httpd_resp_set_type(req, "application/json");
     if (j.failed) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status excedeu buffer");
     return httpd_resp_send(req, j.data, j.used);
