@@ -109,6 +109,7 @@ Estados e transições:
 - `BOTH_LIMITS_ACTIVE`
 - `UNKNOWN_POSITION_AT_BOOT`
 - `GPIO_CONFIGURATION`
+- `GPIO_WRITE_FAILURE` (escrita recusada pelo driver, comando não confirmado)
 - `TRAVEL_TOO_FAST` (destino acionou antes do tempo mínimo plausível)
 - `TRAVEL_TIMEOUT` (destino não acionou antes do máximo)
 - `UNEXPECTED_LIMIT`
@@ -321,7 +322,7 @@ mínimo nunca reduz o mínimo físico de segurança.
 
 GET / serve HTML; GET /api/status retorna exatamente seis GPIOs: limit_top,
 limit_bottom, button, motor_in1, motor_in2 e onboard_led. O objeto motor informa
-command (BRAKE/UP/DOWN), brake_commanded, inputs_defined e
+command (BRAKE/UP/DOWN/UNKNOWN), brake_commanded, inputs_defined e
 independent_shutdown:false. BRAKE é comando, sem medição de velocidade,
 corrente ou retenção. Entradas não amostradas usam sampled:false; saídas mostram
 comandos, eventos e timestamps, sem realimentação elétrica.
@@ -388,7 +389,7 @@ Não realizar merge automaticamente.
 
 - ESP-IDF 5.3.1 / esp32c3: build aprovado, sem avisos/erros do compilador;
   imagem de aplicação cabe na partição de 1 MiB, com 17% livres.
-- Runner versionado com --browser: 27 cenários no automático e 27 no
+- Runner versionado com --browser: 36 cenários no automático e 36 no
   supervisionado aprovados, mais seis checks com limites não confirmados,
   um check de tempos zerados e 11 variantes inválidas rejeitadas.
 - Inicialização GPIO, interrupções/pulls, NVS load/write/commit/reload/falhas,
@@ -399,3 +400,28 @@ Não realizar merge automaticamente.
   Abertura direta por file:// permanece não validada por política do navegador.
 - Testes físicos: **não executados**. Esta aprovação é somente de software;
   não comprova funcionamento elétrico, frenagem ou segurança do mecanismo.
+
+### Correção da auditoria do PR #1 — falhas de escrita GPIO
+
+output_level verifica esp_err_t e só atualiza o valor aceito, contadores e
+timestamp após ESP_OK. Falha trava FAULT, registra GPIO/erro/contexto e impede
+novas partidas até reinicialização. O latch de falha não escreve GPIOs, evitando
+recursão. motor_start só retorna sucesso/entra MOVING depois de todas as escritas
+necessárias; em partida parcial tenta rollback para 00 uma vez.
+motor_brake tenta ambos os pinos mesmo se o primeiro falhar e não retorna
+sucesso se houve erro. Uma parada recusada não registra viagem/calibração válida.
+
+Mesmo após uma tentativa posterior aceita, a incerteza da falha permanece
+travada até reboot. A API usa UNKNOWN, brake_commanded:false, level:null,
+active:false e write_ok:false nas saídas afetadas por essa incerteza; expõe
+gpio_write_failed/gpio_pin/gpio_error. A interface não mostra movimento,
+frenagem ou glow ativo como confirmados. Sucesso do driver é apenas aceitação
+do comando lógico, nunca medição elétrica ou garantia de frenagem/retenção.
+
+O runner injeta erros persistentes/transitórios no preload, pré-partida,
+acionamento dos dois sentidos, partida parcial, parada por destino/timeout e
+LED, além de verificar os handlers e o dashboard com um pino simulado preso
+em HIGH após parada recusada. Validação local de software, não CI aprovado;
+evidências da nova rodada são publicadas no PR. Nenhum teste físico realizado.
+Uma partida parcial pode produzir energização antes do rollback; sem GPIO de
+ENABLE, o firmware não oferece corte independente se a escrita de parada falhar.

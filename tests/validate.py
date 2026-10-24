@@ -18,6 +18,9 @@ CONTROL = r'''
 #include <string.h>
 #include <stddef.h>
 #define ELEVATOR_HOST_TEST
+#define ESP_OK 0
+#define ESP_FAIL -1
+typedef int esp_err_t;
 #define IRAM_ATTR
 #define portMUX_TYPE int
 #define portMUX_INITIALIZER_UNLOCKED 0
@@ -63,12 +66,18 @@ CONTROL = r'''
 #define CONFIG_ELEVATOR_AUTOMATIC_ENABLED 1
 #endif
 static uint64_t simulated_ms;
-static int levels[22], commands;
+static int levels[22], commands, gpio_calls[22];
+static int fail_pin=-1, fail_level=-1, fail_skip, fail_remaining;
 static int64_t esp_timer_get_time(void) { return simulated_ms * 1000; }
 static int gpio_get_level(int pin) { return levels[pin]; }
 static int gpio_set_level(int pin, int level)
 {
     assert(pin != 21); /* Default map must not touch the formerly assigned pad. */
+    ++gpio_calls[pin];
+    if(pin==fail_pin && (fail_level<0 || level==fail_level) && fail_remaining) {
+        if(fail_skip) --fail_skip;
+        else {if(fail_remaining>0)--fail_remaining;return ESP_FAIL;}
+    }
     if ((pin == 3 || pin == 4) && level) { assert(!levels[pin == 3 ? 4 : 3]); ++commands; }
     levels[pin] = level; return 0;
 }
@@ -82,7 +91,7 @@ static uint32_t esp_rom_crc32_le(uint32_t seed, const uint8_t *bytes, size_t n)
 static void advance(unsigned ms)
 {
     assert(ms%10==0);
-    for(unsigned t=0;t<ms;t+=10){simulated_ms+=10;control_tick(NULL);assert(!(levels[3]&&levels[4]));assert(ctl.drive_commanded==(bool)(levels[3]||levels[4]));}
+    for(unsigned t=0;t<ms;t+=10){simulated_ms+=10;control_tick(NULL);assert(!(levels[3]&&levels[4]));if(!ctl.gpio_write_failed)assert(ctl.drive_commanded==(bool)(levels[3]||levels[4]));}
 }
 static void edge(int pin, int value)
 {
@@ -93,9 +102,10 @@ static void edge(int pin, int value)
 }
 static void fresh(int top,int bottom,bool calibrated)
 {
-    memset(&ctl,0,sizeof(ctl));memset(levels,0,sizeof(levels));simulated_ms=0;commands=0;
+    memset(&ctl,0,sizeof(ctl));memset(levels,0,sizeof(levels));memset(gpio_calls,0,sizeof(gpio_calls));simulated_ms=0;commands=0;
+    fail_pin=-1;fail_level=-1;fail_skip=0;fail_remaining=0;
     levels[10]=top;levels[1]=bottom;levels[20]=1;
-    ctl=(controller_t){.state=BOOT,.pins_ready=true,.web_ok=true,.nvs_ok=true,
+    ctl=(controller_t){.state=BOOT,.pins_ready=true,.web_ok=true,.nvs_ok=true,.output_known={true,true,true},
         .top={.pin=10,.active_level=1,.raw_level=top},
         .bottom={.pin=1,.active_level=1,.raw_level=bottom},
         .button={.pin=20,.active_level=0,.raw_level=1}};
@@ -156,6 +166,76 @@ int main(void)
     }
     printf("%d cases passed\n",cases);return 0;
 #endif
+    CASE("failed output preserves last accepted value and counters") {
+        fresh(1,0,true);uint32_t count=ctl.output_events[0];uint64_t changed=ctl.output_change_ms[0];
+        fail_pin=3;fail_level=1;fail_remaining=-1;
+        assert(!output_level(0,3,&ctl.motor_in1,1));
+        assert(ctl.motor_in1==0&&!ctl.output_known[0]&&ctl.output_events[0]==count&&ctl.output_change_ms[0]==changed);
+        assert(ctl.state==FAULT&&ctl.fault==GPIO_WRITE_FAILURE&&ctl.failed_gpio_pin==3&&ctl.gpio_error==ESP_FAIL);
+    }
+    CASE("pre-start brake failure attempts both pads and refuses start") {
+        for(int pin=3;pin<=4;pin++){
+            fresh(1,0,true);advance(500);
+#ifdef TEST_SUPERVISED
+            ctl.armed=true;
+#endif
+            fail_pin=pin;fail_level=0;fail_remaining=-1;int other=pin==3?4:3;int before=gpio_calls[other];
+            assert(!motor_start(false)&&ctl.state==FAULT&&!ctl.drive_commanded&&commands==0);
+            assert(gpio_calls[other]>before);
+        }
+    }
+    CASE("directional write failure refuses start in either direction") {
+        for(int up=0;up<=1;up++){
+            fresh(!up,up,true);advance(500);
+#ifdef TEST_SUPERVISED
+            ctl.armed=true;
+#endif
+            fail_pin=up?3:4;fail_level=1;fail_remaining=-1;
+            uint64_t before=ctl.command_ms;
+            assert(!motor_start(up)&&ctl.state==FAULT&&!moving()&&!ctl.drive_commanded);
+            assert(ctl.command_ms==before&&commands==0&&!levels[3]&&!levels[4]);
+            fail_remaining=0;assert(!motor_start(up));advance(1000);assert(ctl.state==FAULT&&commands==0);
+        }
+    }
+    CASE("partial start rolls back and never reports successful motion") {
+        fresh(0,1,true);advance(500);
+#ifdef TEST_SUPERVISED
+        ctl.armed=true;
+#endif
+        fail_pin=4;fail_level=0;fail_skip=1;fail_remaining=-1;
+        assert(!motor_start(true)&&ctl.state==FAULT&&!ctl.drive_commanded&&commands==1);
+        assert(!levels[3]&&!levels[4]&&ctl.gpio_write_failed);
+    }
+    CASE("destination stop write failure latches unknown output and no calibration") {
+        begin_down();release_origin();at_elapsed(1200);
+        uint32_t cycles=ctl.cal.down_count;int before=commands;
+        fail_pin=4;fail_level=0;fail_remaining=-1;edge(1,1);advance(60);
+        assert(ctl.fault==GPIO_WRITE_FAILURE&&ctl.state==FAULT&&!ctl.drive_commanded);
+        assert(levels[4]==1&&ctl.motor_in2==1&&!ctl.output_known[1]);
+        assert(ctl.last_down_ms==0&&ctl.cal.down_count==cycles&&!ctl.calibration_dirty);
+        advance(1000);assert(ctl.state==FAULT&&commands==before&&!motor_start(true));
+    }
+    CASE("failed first stop write still attempts second low write") {
+        begin_down();fail_pin=3;fail_level=0;fail_remaining=-1;int before=gpio_calls[4];
+        assert(!motor_brake()&&ctl.state==FAULT&&gpio_calls[4]==before+1);
+        assert(!levels[4]&&!ctl.drive_commanded&&ctl.gpio_write_failed);
+    }
+    CASE("transient stop error remains latched after best effort succeeds") {
+        begin_down();fail_pin=4;fail_level=0;fail_remaining=1;
+        assert(!motor_brake()&&levels[4]==1);
+        assert(!motor_brake()&&!levels[4]&&ctl.state==FAULT&&ctl.gpio_write_failed);
+        advance(1000);assert(!motor_start(false)&&ctl.state==FAULT);
+    }
+    CASE("timeout braking error cannot return to normal operation") {
+        begin_down();release_origin();fail_pin=4;fail_level=0;fail_remaining=-1;at_elapsed(5010);
+        assert(ctl.state==FAULT&&ctl.gpio_write_failed&&!ctl.drive_commanded&&levels[4]==1);
+    }
+    CASE("LED write error preserves metadata and attempts motor braking") {
+        begin_down();int previous=ctl.led_level;uint32_t count=ctl.output_events[2];
+        fail_pin=8;fail_level=-1;fail_remaining=-1;ctl.now_ms+=250;update_led();
+        assert(ctl.state==FAULT&&!ctl.drive_commanded&&!levels[3]&&!levels[4]);
+        assert(ctl.led_level==previous&&ctl.output_events[2]==count&&!ctl.output_known[2]);
+    }
     CASE("raw destination stops before debounce; valid finish") {
         begin_down();release_origin();at_elapsed(1200);arrive_bottom();assert(ctl.fault==NONE&&!moving());assert(ctl.last_down_ms==1210);
 #ifdef TEST_SUPERVISED
@@ -327,6 +407,12 @@ PLATFORM_TESTS = r'''
 int main(void) {
  fresh(1,0,true);levels[3]=levels[4]=1;assert(initialize_gpio());assert(configured==6&&isrs==3&&service==1);
  assert(!levels[3]&&!levels[4]);puts("PASS gpio initialization, both low latches, pulls, ANYEDGE, no GPIO21");
+ for(int pin=3;pin<=4;pin++){
+   fresh(1,0,true);ctl.pins_ready=false;fail_pin=pin;fail_level=0;fail_remaining=-1;
+   assert(!initialize_gpio()&&ctl.fault==GPIO_WRITE_FAILURE&&!ctl.pins_ready);
+ }
+ puts("PASS GPIO preload write failures refuse initialization");
+ fresh(1,0,true);
  stored=ctl.cal;nvsmode=1;ctl.calibration_valid=false;assert(load_calibration()&&ctl.calibration_valid);
  nvsmode=0;assert(load_calibration()&&!ctl.calibration_valid&&ctl.cal.up_count==0);
  nvsmode=1;stored.crc^=1;assert(!load_calibration()&&!ctl.calibration_valid);stored.crc^=1;
@@ -349,6 +435,10 @@ int main(void) {
  memset(&r,0,sizeof(r));assert(health_handler(&r)==0);assert(!strcmp(r.body,"{\"healthy\":true}"));
  fail(TRAVEL_TIMEOUT);memset(&r,0,sizeof(r));assert(status_handler(&r)==0);f=fopen("fault-fixture.json","w");assert(f);fputs(r.body,f);fclose(f);
  memset(&r,0,sizeof(r));assert(health_handler(&r)==0);assert(!strcmp(r.status,"503 Service Unavailable"));
+ begin_down();fail_pin=4;fail_level=0;fail_remaining=-1;assert(!motor_brake()&&levels[4]==1);
+ memset(&r,0,sizeof(r));assert(status_handler(&r)==0);f=fopen("gpio-fault-fixture.json","w");assert(f);fputs(r.body,f);fclose(f);
+ memset(&r,0,sizeof(r));assert(health_handler(&r)==0);assert(!strcmp(r.status,"503 Service Unavailable"));
+ puts("PASS GPIO failure status/health reports unknown command, not confirmed braking");
  memset(&r,0,sizeof(r));assert(index_handler(&r)==0);assert(!strcmp(r.type,"text/html; charset=utf-8")&&r.no_cache&&r.csp);
  assert(strlen(r.body)==(size_t)(index_html_end-index_html_start-1));assert(strstr(r.body,"IN1=IN2=0"));
  json_t j={0};char big[4000];memset(big,'x',sizeof(big)-1);big[sizeof(big)-1]=0;json_add(&j,"%s",big);assert(j.failed);
@@ -419,8 +509,18 @@ const assert=require('assert');
  assert((await live.locator('#error').textContent()).includes('<img'));
  await live.emulateMedia({reducedMotion:'reduce'});
  assert.equal(await live.locator('#cab').evaluate(e=>getComputedStyle(e).transitionDuration),'0s');
+ fixture.gpio.onboard_led.enabled=false;fixture.gpio.onboard_led.write_ok=false;
+ await live.waitForFunction(()=>document.querySelector('#gpio-onboard_led b').textContent.includes('DESABILITADO'));
  fixture.state='INVALID';await live.waitForFunction(()=>document.querySelector('#state').textContent==='SEM TELEMETRIA');assert.equal(await live.locator('.gpio.active').count(),0);
  console.log('PASS escaped dynamic text, reduced-motion, malformed API rejected');
+ Object.assign(fixture,JSON.parse(fs.readFileSync('gpio-fault-fixture.json','utf8')));
+ await live.waitForFunction(()=>document.querySelector('#cab').textContent==='NÃO CONFIRMADO');
+ assert((await live.locator('#braking').textContent()).includes('Comando GPIO não confirmado'));
+ for(const key of ['motor_in1','motor_in2']){
+   assert((await live.locator('#gpio-'+key+' b').textContent()).includes('NÃO CONFIRMADO'));
+   assert(!(await live.locator('#gpio-'+key).evaluate(e=>e.classList.contains('active'))));
+ }
+ console.log('PASS GPIO failure UI: no confirmed movement/braking, unknown outputs, no active glow');
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});
 '''
@@ -504,6 +604,12 @@ def validate(output, browser):
     assert status["motor"]["independent_shutdown"] is False
     assert fault["error"]["code"] == "TRAVEL_TIMEOUT" and fault["state"] == "FAULT"
     assert fault["gpio"]["motor_in1"]["level"] == fault["gpio"]["motor_in2"]["level"] == 0
+    failed = json.loads((output / "gpio-fault-fixture.json").read_text())
+    assert failed["state"] == "FAULT" and failed["motion"] == "UNKNOWN"
+    assert failed["motor"]["command"] == "UNKNOWN" and failed["motor"]["brake_commanded"] is False
+    assert failed["error"]["gpio_write_failed"] and failed["error"]["gpio_pin"] == 4 and failed["error"]["gpio_error"] == -1
+    for key in ("motor_in1", "motor_in2"):
+        assert failed["gpio"][key]["level"] is None and not failed["gpio"][key]["active"] and not failed["gpio"][key]["write_ok"]
     print("PASS parsed API fixtures: six real GPIOs, brake semantics, no independent shutdown")
     if browser:
         test = output / "browser.cjs"

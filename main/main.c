@@ -63,19 +63,19 @@ typedef enum { BOOT, NEEDS_COMMISSIONING, IDLE_TOP, IDLE_BOTTOM,
 typedef enum { NONE, BOTH_LIMITS_ACTIVE, UNKNOWN_POSITION_AT_BOOT,
     GPIO_CONFIGURATION, TRAVEL_TOO_FAST, TRAVEL_TIMEOUT, UNEXPECTED_LIMIT,
     LIMIT_SENSOR_INCONSISTENT, START_LIMIT_NOT_RELEASED,
-    NVS_OR_CALIBRATION_INVALID, AP_OR_HTTP_FAILURE } fault_t;
+    NVS_OR_CALIBRATION_INVALID, AP_OR_HTTP_FAILURE, GPIO_WRITE_FAILURE } fault_t;
 static const char *const state_names[] = {"BOOT","NEEDS_COMMISSIONING","IDLE_TOP",
     "IDLE_BOTTOM","WAIT_AUTO_UP","MOVING_UP","MOVING_DOWN","FAULT"};
 static const char *const fault_names[] = {"NONE","BOTH_LIMITS_ACTIVE",
     "UNKNOWN_POSITION_AT_BOOT","GPIO_CONFIGURATION","TRAVEL_TOO_FAST",
     "TRAVEL_TIMEOUT","UNEXPECTED_LIMIT","LIMIT_SENSOR_INCONSISTENT",
-    "START_LIMIT_NOT_RELEASED","NVS_OR_CALIBRATION_INVALID","AP_OR_HTTP_FAILURE"};
+    "START_LIMIT_NOT_RELEASED","NVS_OR_CALIBRATION_INVALID","AP_OR_HTTP_FAILURE","GPIO_WRITE_FAILURE"};
 static const char *const fault_messages[] = {"Sem falha", "Ambos os fins ativos",
     "Posicao desconhecida no boot", "Pinos, console, senha ou tempos invalidos",
     "Destino antes do minimo fisico", "Tempo maximo excedido",
     "Fim mudou sem movimento ordenado", "Sequencia dos fins inconsistente",
     "Fim de origem nao liberou", "NVS ou calibracao invalida",
-    "Falha de AP ou HTTP; motor bloqueado"};
+    "Falha de AP ou HTTP; motor bloqueado", "Falha de escrita GPIO; comando nao confirmado"};
 typedef struct {
     int pin, active_level, raw_level;
     bool debounced_active, initialized, edge_seen;
@@ -94,7 +94,9 @@ typedef struct {
     uint64_t button_pressed_ms, first_destination_ms;
     bool initialized, pins_ready, drive_commanded, origin_released;
     bool destination_pending, armed, arm_release_needed, calibration_dirty;
-    bool calibration_valid, nvs_ok, web_ok, position_top;
+    bool calibration_valid, nvs_ok, web_ok, position_top, gpio_write_failed;
+    bool output_known[3];
+    int failed_gpio_pin, gpio_error;
     int motor_in1, motor_in2, led_level;
     uint32_t ignored_presses, last_up_ms, last_down_ms, generation;
     uint32_t output_events[3];
@@ -143,28 +145,51 @@ static void transition(state_t state)
 {
     if (ctl.state != state) { ctl.state = state; ctl.state_ms = ctl.now_ms; }
 }
-static void output_level(unsigned index, int pin, int previous, int level)
+/* Latch only: no GPIO calls here, so failure handling cannot recurse. */
+static void latch_fault(fault_t reason)
 {
-    gpio_set_level(pin, level);
-    if (previous != level) {
+    if (ctl.fault == NONE) {
+        ctl.fault = reason; ctl.fault_state = ctl.state; ctl.fault_ms = ctl.now_ms;
+    }
+    ctl.armed = false; transition(FAULT);
+}
+/* Success means the driver accepted the write, never electrical feedback.
+ * Preserve the last accepted value/event count on failure. Uncertainty is
+ * latched until reboot, even if a best-effort brake retry later succeeds. */
+static bool output_level(unsigned index, int pin, int *previous, int level)
+{
+    esp_err_t err = gpio_set_level(pin, level);
+    if (err != ESP_OK) {
+        ctl.output_known[index] = false;
+        if (!ctl.gpio_write_failed) { ctl.failed_gpio_pin = pin; ctl.gpio_error = err; }
+        ctl.gpio_write_failed = true; ctl.drive_commanded = false;
+        latch_fault(GPIO_WRITE_FAILURE);
+        return false;
+    }
+    ctl.output_known[index] = true;
+    if (*previous != level) {
         ++ctl.output_events[index]; ctl.output_change_ms[index] = ctl.now_ms;
     }
+    *previous = level;
+    return true;
 }
-static void motor_brake(void)
+static bool motor_brake(void)
 {
+    bool was_driving = ctl.drive_commanded;
+    bool in1_ok = false, in2_ok = false;
     if (ctl.pins_ready) {
-        output_level(0, IN1_PIN, ctl.motor_in1, 0);
-        output_level(1, IN2_PIN, ctl.motor_in2, 0);
+        /* Attempt BOTH low writes, even if the first fails. Bounded, no recursion. */
+        in1_ok = output_level(0, IN1_PIN, &ctl.motor_in1, 0);
+        in2_ok = output_level(1, IN2_PIN, &ctl.motor_in2, 0);
     }
-    if (ctl.drive_commanded) ctl.stopped_ms = ctl.now_ms;
-    ctl.drive_commanded = false; ctl.motor_in1 = ctl.motor_in2 = 0;
+    if (was_driving && in1_ok && in2_ok) ctl.stopped_ms = ctl.now_ms;
+    ctl.drive_commanded = false;
+    return in1_ok && in2_ok && !ctl.gpio_write_failed;
 }
 static void fail(fault_t reason)
 {
     motor_brake();
-    if (ctl.fault != NONE) return;
-    ctl.fault = reason; ctl.fault_state = ctl.state; ctl.fault_ms = ctl.now_ms;
-    ctl.armed = false; transition(FAULT);
+    latch_fault(reason);
 }
 static bool valid_gpio(int pin)
 {
@@ -245,20 +270,22 @@ static bool motor_start(bool up)
         ctl.now_ms - origin->last_change_ms < CONFIG_ELEVATOR_LIMIT_DEBOUNCE_MS ||
         ctl.now_ms - dest->last_change_ms < CONFIG_ELEVATOR_LIMIT_DEBOUNCE_MS ||
         max_time(up) <= min_time(up)) return false;
-    motor_brake();
+    if (!motor_brake()) return false;
+    bool in1 = up == UP_IN1;
+    if (!output_level(0, IN1_PIN, &ctl.motor_in1, in1) ||
+        !output_level(1, IN2_PIN, &ctl.motor_in2, !in1)) {
+        motor_brake(); /* One best-effort rollback; the fault stays latched. */
+        return false;
+    }
     ctl.command_ms = ctl.now_ms; ctl.origin_released = false; ctl.destination_pending = false;
     ctl.first_destination_ms = 0;
     transition(up ? MOVING_UP : MOVING_DOWN);
-    bool in1 = up == UP_IN1;
-    output_level(0, IN1_PIN, ctl.motor_in1, in1);
-    output_level(1, IN2_PIN, ctl.motor_in2, !in1);
-    ctl.motor_in1 = in1; ctl.motor_in2 = !in1;
     ctl.drive_commanded = true;
     return true;
 }
 static void finish_travel(bool up)
 {
-    motor_brake();
+    if (!motor_brake()) return;
     uint64_t duration = ctl.first_destination_ms - ctl.command_ms;
     if (duration < min_time(up)) { fail(TRAVEL_TOO_FAST); return; }
     if (duration > max_time(up)) { fail(TRAVEL_TIMEOUT); return; }
@@ -295,7 +322,8 @@ static void monitor_travel(void)
     }
     /* First sampled destination stops output before debounce. No bounce restart. */
     if ((raw_active(dest) || dest->edge_seen) && !ctl.destination_pending) {
-        ctl.destination_pending = true; ctl.first_destination_ms = ctl.now_ms; motor_brake();
+        ctl.destination_pending = true; ctl.first_destination_ms = ctl.now_ms;
+        if (!motor_brake()) return;
     }
     if (ctl.destination_pending) {
         if (dest->debounced_active) {
@@ -320,7 +348,7 @@ static void update_led(void)
     default: on = true; break;
     }
     int level = on ? CONFIG_ELEVATOR_STATUS_LED_ACTIVE_LEVEL : !CONFIG_ELEVATOR_STATUS_LED_ACTIVE_LEVEL;
-    output_level(2, LED_PIN, ctl.led_level, level); ctl.led_level = level;
+    if (!output_level(2, LED_PIN, &ctl.led_level, level)) motor_brake();
 }
 static void control_tick(void *arg)
 {
@@ -384,7 +412,8 @@ static bool initialize_gpio(void)
     const int outputs[] = {IN1_PIN, IN2_PIN};
     /* Preload BOTH low latches before assigning either pad to GPIO output. */
     for (unsigned i = 0; i < 2; ++i) {
-        if (gpio_set_level(outputs[i], 0) != ESP_OK) return false;
+        int *value = i == 0 ? &ctl.motor_in1 : &ctl.motor_in2;
+        if (!output_level(i, outputs[i], value, 0)) return false;
     }
     for (unsigned i = 0; i < 2; ++i) {
         gpio_config_t cfg = {.pin_bit_mask = 1ULL << outputs[i], .mode = GPIO_MODE_OUTPUT,
@@ -392,14 +421,14 @@ static bool initialize_gpio(void)
             .intr_type = GPIO_INTR_DISABLE};
         if (gpio_config(&cfg) != ESP_OK) return false;
     }
-    ctl.pins_ready = true; motor_brake();
+    ctl.pins_ready = true;
+    if (!motor_brake()) return false;
     if (LED_ENABLED) {
         gpio_config_t cfg = {.pin_bit_mask = 1ULL << LED_PIN, .mode = GPIO_MODE_OUTPUT,
             .pull_up_en = GPIO_PULLUP_DISABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
             .intr_type = GPIO_INTR_DISABLE};
         int inactive = !CONFIG_ELEVATOR_STATUS_LED_ACTIVE_LEVEL;
-        if (gpio_set_level(LED_PIN, inactive) != ESP_OK || gpio_config(&cfg) != ESP_OK) return false;
-        ctl.led_level = inactive;
+        if (!output_level(2, LED_PIN, &ctl.led_level, inactive) || gpio_config(&cfg) != ESP_OK) return false;
     }
     input_t *inputs[] = {&ctl.top, &ctl.bottom, &ctl.button};
     if (gpio_install_isr_service(0) != ESP_OK) return false;
@@ -489,16 +518,20 @@ static void json_input(json_t *j, const char *name, const input_t *in)
 static void json_output(json_t *j, const controller_t *s, unsigned index, const char *name,
     int pin, int level, bool active, bool enabled)
 {
-    json_add(j, "\"%s\":{\"pin\":%d,\"level\":%d,\"active\":%s,\"enabled\":%s,"
-        "\"events\":%"PRIu32",\"last_change_ms\":%"PRIu64"}%s",
-        name, pin, level, json_bool(active && enabled), json_bool(enabled),
-        s->output_events[index], s->output_change_ms[index], index == 2 ? "}," : ",");
+    bool known = enabled && s->output_known[index] && !s->gpio_write_failed;
+    char accepted[4];
+    snprintf(accepted, sizeof(accepted), "%d", level);
+    json_add(j, "\"%s\":{\"pin\":%d,\"level\":%s,\"active\":%s,\"enabled\":%s,"
+        "\"write_ok\":%s,\"events\":%"PRIu32",\"last_change_ms\":%"PRIu64"}%s",
+        name, pin, known ? accepted : "null", json_bool(active && known), json_bool(enabled),
+        json_bool(known), s->output_events[index], s->output_change_ms[index], index == 2 ? "}," : ",");
 }
 static esp_err_t status_handler(httpd_req_t *req)
 {
     controller_t s;
     portENTER_CRITICAL(&control_mux); s = ctl; portEXIT_CRITICAL(&control_mux);
     uint64_t now = clock_ms();
+    bool motor_known = s.pins_ready && s.output_known[0] && s.output_known[1] && !s.gpio_write_failed;
     bool in_motion = s.state == MOVING_UP || s.state == MOVING_DOWN;
     uint64_t elapsed = in_motion ? now - s.command_ms : 0;
     uint64_t remaining = s.state == WAIT_AUTO_UP && now - s.state_ms < WAIT_MS ? WAIT_MS - (now - s.state_ms) : 0;
@@ -509,17 +542,18 @@ static esp_err_t status_handler(httpd_req_t *req)
     nullable_ms(last_up, sizeof(last_up), s.last_up_ms); nullable_ms(last_down, sizeof(last_down), s.last_down_ms);
     json_t j = {0};
     json_add(&j, "{\"state\":\"%s\",\"motion\":\"%s\",\"position\":\"%s\",\"calibrated\":%s,",
-        state_names[s.state], s.drive_commanded ? (s.state == MOVING_UP ? "UP" : "DOWN") : "STOPPED", position, json_bool(s.calibration_valid));
+        state_names[s.state], !motor_known ? "UNKNOWN" : s.drive_commanded ? (s.state == MOVING_UP ? "UP" : "DOWN") : "STOPPED", position, json_bool(s.calibration_valid));
     json_add(&j, "\"motor\":{\"command\":\"%s\",\"brake_commanded\":%s,"
         "\"inputs_defined\":%s,\"independent_shutdown\":false},",
-        s.drive_commanded ? (s.state == MOVING_UP ? "UP" : "DOWN") : "BRAKE",
-        json_bool(s.pins_ready && !s.drive_commanded), json_bool(s.pins_ready));
+        !motor_known ? "UNKNOWN" : s.drive_commanded ? (s.state == MOVING_UP ? "UP" : "DOWN") : "BRAKE",
+        json_bool(motor_known && !s.drive_commanded), json_bool(motor_known));
     json_add(&j, "\"commissioning\":{\"supervised\":%s,\"armed\":%s,\"automatic_enabled\":%s,"
         "\"limits_confirmed\":%s,\"pending_save\":%s,\"up_count\":%"PRIu32",\"down_count\":%"PRIu32",\"required_cycles\":%d},",
         json_bool(SUPERVISED), json_bool(s.armed), json_bool(AUTOMATIC), json_bool(LIMITS_CONFIRMED),
         json_bool(s.calibration_dirty), s.cal.up_count, s.cal.down_count, CONFIG_ELEVATOR_REQUIRED_CYCLES);
-    json_add(&j, "\"error\":{\"code\":\"%s\",\"message\":\"%s\",\"state\":\"%s\",\"time_ms\":%"PRIu64"},\"gpio\":{",
-        fault_names[s.fault], fault_messages[s.fault], state_names[s.fault_state], s.fault_ms);
+    json_add(&j, "\"error\":{\"code\":\"%s\",\"message\":\"%s\",\"state\":\"%s\",\"time_ms\":%"PRIu64",\"gpio_write_failed\":%s,\"gpio_pin\":%d,\"gpio_error\":%d},\"gpio\":{",
+        fault_names[s.fault], fault_messages[s.fault], state_names[s.fault_state], s.fault_ms,
+        json_bool(s.gpio_write_failed), s.failed_gpio_pin, s.gpio_error);
     json_input(&j, "limit_top", &s.top); json_input(&j, "limit_bottom", &s.bottom); json_input(&j, "button", &s.button);
     json_output(&j, &s, 0, "motor_in1", IN1_PIN, s.motor_in1, s.motor_in1, s.pins_ready);
     json_output(&j, &s, 1, "motor_in2", IN2_PIN, s.motor_in2, s.motor_in2, s.pins_ready);
@@ -610,20 +644,26 @@ void app_main(void)
     if (esp_timer_create(&args, &timer) != ESP_OK ||
         esp_timer_start_periodic(timer, CONFIG_ELEVATOR_SAMPLE_MS * 1000ULL) != ESP_OK) {
         fail(GPIO_CONFIGURATION);
-        ESP_LOGE(TAG, "Controle indisponivel; IN1=IN2=0, frenagem eletrica");
+        ESP_LOGE(TAG, "Controle indisponivel; frenagem solicitada, sem confirmacao eletrica");
         return;
     }
     ESP_LOGI(TAG, "AP %s, HTTP somente leitura; confirmar LED e retencao mecanica", CONFIG_ELEVATOR_AP_SSID);
     fault_t logged_fault = NONE;
+    bool logged_gpio_failure = false;
     /* Reuse IDF main task. Flash writes occur only when stationary. */
     for (;;) {
         save_calibration();
         portENTER_CRITICAL(&control_mux);
         fault_t fault = ctl.fault; state_t when = ctl.fault_state; uint64_t at = ctl.fault_ms;
+        bool gpio_failed = ctl.gpio_write_failed; int pin = ctl.failed_gpio_pin, err = ctl.gpio_error;
         portEXIT_CRITICAL(&control_mux);
         if (fault != NONE && fault != logged_fault) {
             ESP_LOGE(TAG, "%s: %s; state=%s time_ms=%"PRIu64, fault_names[fault], fault_messages[fault], state_names[when], at);
             logged_fault = fault;
+        }
+        if (gpio_failed && !logged_gpio_failure) {
+            ESP_LOGE(TAG, "Escrita GPIO%d falhou: err=%d; nivel eletrico desconhecido", pin, err);
+            logged_gpio_failure = true;
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
