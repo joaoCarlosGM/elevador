@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Elevador • ESP32-C3 Mini</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#e6edf3;background:#0b1018;font-size:16px;--green:#73efb3;--amber:#ffd27c;--red:#ff9b9b}
+*{box-sizing:border-box}body{margin:0}main{max-width:1120px;margin:auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}h1{font-size:1.35rem;margin:0}h2{font-size:1rem;margin:0 0 16px}p{line-height:1.5}small,.muted{color:#aab9cb}small{display:block;font-size:.8rem}.pill{border:1px solid #42536a;border-radius:99px;padding:7px 12px;font-size:.78rem}.banner{margin:20px 0;padding:12px;border:1px solid #81704c;background:#282316;border-radius:10px;color:var(--amber)}.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:16px}.panel{min-width:0;background:#131d2a;border:1px solid #2b3b50;border-radius:16px;padding:20px;margin-bottom:16px}.state{font-size:1.5rem;color:var(--amber);font-weight:700;overflow-wrap:anywhere}.shaft{height:280px;position:relative;margin:20px auto;width:140px;border:2px solid #4a627d;background:repeating-linear-gradient(0deg,#0b1420,#0b1420 39px,#25374b 40px);border-radius:10px}.cab{position:absolute;left:20px;right:20px;height:64px;bottom:8px;border:2px solid #8fa7c1;border-radius:8px;background:#254562;transition:bottom .35s linear;display:grid;place-items:center;font-size:.8rem}.cab.active{border-color:var(--green);box-shadow:0 0 20px #73efb32b}.floor{position:absolute;left:150px;font-size:.75rem;color:#aab9cb}.top{top:12px}.bottom{bottom:12px}progress{width:100%;height:12px;accent-color:var(--amber)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.gpio{border:1px solid #42536a;border-radius:10px;padding:12px;min-height:100px;overflow-wrap:anywhere}.gpio strong{font-size:.75rem}.gpio b{display:block;font-size:1.1rem;margin:6px 0}.gpio.active{border-color:var(--green);box-shadow:inset 0 0 18px #73efb313;color:var(--green)}.fault{color:var(--red);overflow-wrap:anywhere}.ok{color:var(--green)}table{width:100%;border-collapse:collapse;font-size:.78rem;table-layout:fixed}th,td{padding:10px 4px;text-align:right;border-bottom:1px solid #2b3b50;overflow-wrap:anywhere}th:first-child,td:first-child{text-align:left;width:48%}ol{padding-left:20px;font-size:.8rem;color:#bdcada}li{margin:8px 0;overflow-wrap:anywhere}footer{font-size:.8rem;color:#aab9cb;line-height:1.6}details{margin-top:14px;font-size:.85rem;line-height:1.6}summary{cursor:pointer;min-height:40px}#events{max-height:180px;overflow:auto}#countdown{font-variant-numeric:tabular-nums}button{font:inherit;padding:10px 16px;border-radius:8px;border:1px solid #607690;background:#20334a;color:#e6edf3;min-height:44px}
+@media(max-width:700px){main{padding:12px}.layout{grid-template-columns:1fr}.panel{padding:16px}.shaft{margin-left:calc(50% - 90px)}h1{font-size:1.15rem}.floor{left:145px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body><main>
+<header><div><small>MONITOR EXPERIMENTAL DE BANCADA</small><h1>Elevador • ESP32-C3 Mini</h1></div><span class="pill" id="connection" role="status">SEM TELEMETRIA</span></header>
+<div class="banner" id="source">Conecte-se ao AP configurado. Aguardando dados reais.</div>
+<div class="layout">
+<section>
+<div class="panel"><h2>Posição e movimento</h2><div class="state" id="state">SEM TELEMETRIA</div><small id="position">Posição desconhecida</small>
+<div class="shaft" aria-label="Representação estimada do elevador"><span class="floor top">SUPERIOR</span><span class="floor bottom">INFERIOR</span><div class="cab" id="cab">SEM DADOS</div></div>
+<p id="estimate" class="muted">Posição estimada, sem encoder. Extremos confirmados apenas pelos sensores.</p>
+<strong id="countdown">—</strong><progress id="wait" max="10000" value="0" aria-label="Espera antes da subida"></progress>
+<p class="fault" id="error" role="alert"></p><small id="blocked">Comando de movimento bloqueado até confirmação de telemetria.</small><p id="braking" class="muted">Frenagem elétrica não equivale a desligamento independente.</p>
+</div>
+<div class="panel"><h2>Comissionamento</h2><p id="calibration">Sem dados.</p><small id="cycles"></small>
+<details><summary>Procedimento físico supervisionado</summary>Somente bancada, sem pessoas ou animais. Exigir retenção mecânica independente. Confirme pinos, polaridades, sentido e limites de tempo no menuconfig; habilite o modo supervisionado. Com o elevador em um fim conhecido, segure o botão pelo tempo configurado para armar, solte e faça uma nova pressão para cada percurso. Após ciclos válidos nos dois sentidos e gravação NVS concluída, desabilite o modo supervisionado e habilite o automático no menuconfig. A web não comanda o motor. Falhas ficam travadas até reinicialização e diagnóstico.</details>
+</div>
+</section>
+<section>
+<div class="panel"><h2>Auditoria de GPIOs</h2><div id="gpio" class="grid"></div><small style="margin-top:12px">Bruto é o nível elétrico; ativo é a interpretação pela polaridade configurada. Saídas mostram o comando lógico do firmware, sem realimentação elétrica.</small></div>
+<div class="panel"><h2>Tempos de percurso</h2><table><thead><tr><th>Medida</th><th>Subida</th><th>Descida</th></tr></thead><tbody id="times"></tbody></table><p id="elapsed" class="muted">Viagem atual: —</p><small>Histórico mínimo não reduz o limite físico de segurança.</small></div>
+<div class="panel"><h2>Eventos desta sessão do navegador</h2><ol id="events" aria-live="polite"></ol><small id="ignored"></small></div>
+</section></div>
+<footer><div id="updated">Última atualização: —</div>AP padrão: Elevador • WPA2 • IP padrão 192.168.4.1 • Interface somente de leitura.<br>ENABLE fixo no hardware: IN1=IN2=0 comanda frenagem elétrica, sem corte independente de energia e sem garantir retenção da carga. Fio rompido em sensor NC pode parecer fim acionado; não há diagnóstico absoluto sem hardware adicional.</footer>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const demo=location.protocol==='file:';
+const labels={BOOT:'INICIALIZANDO',NEEDS_COMMISSIONING:'CALIBRAÇÃO NECESSÁRIA',IDLE_TOP:'SUPERIOR',IDLE_BOTTOM:'INFERIOR',WAIT_AUTO_UP:'AGUARDANDO',MOVING_UP:'SUBINDO',MOVING_DOWN:'DESCENDO',FAULT:'FALHA'};
+const pins=[['limit_top','GPIO_LIMIT_TOP'],['limit_bottom','GPIO_LIMIT_BOTTOM'],['button','GPIO_BUTTON'],['motor_in1','GPIO_MOTOR_IN1'],['motor_in2','GPIO_MOTOR_IN2'],['onboard_led','GPIO_STATUS_LED']];
+let previous=null,refresh=350,lastUptime=0,offline=true;
+for(const [key,label] of pins){const card=document.createElement('div');card.className='gpio';card.id='gpio-'+key;const title=document.createElement('strong');title.textContent=label;const value=document.createElement('b');value.textContent='—';const info=document.createElement('small');info.textContent='Sem dados';card.append(title,value,info);$('gpio').append(card);}
+function event(text){const li=document.createElement('li');li.textContent=new Date().toLocaleTimeString('pt-BR')+' · '+text;$('events').prepend(li);while($('events').children.length>24)$('events').lastChild.remove();}
+function ms(v){return v===null||v===undefined?'—':(v/1000).toFixed(3)+' s';}
+function stale(reason){
+ offline=true;$('connection').textContent='SEM TELEMETRIA';$('connection').className='pill';$('state').textContent='SEM TELEMETRIA';
+ $('position').textContent='Posição não confirmada';$('cab').textContent='SEM DADOS';$('cab').classList.remove('active');
+ $('countdown').textContent='—';$('wait').value=0;$('error').textContent=reason;$('blocked').textContent='Comando atual de IN1/IN2 desconhecido; não há corte independente de energia.';
+ for(const [key] of pins){const card=$('gpio-'+key);card.classList.remove('active');card.querySelector('b').textContent='—';card.querySelector('small').textContent='Sem telemetria atual';}
+ $('braking').textContent='Sem confirmação atual de IN1/IN2. Não há desligamento independente.';
+ $('calibration').textContent='Sem telemetria atual';$('cycles').textContent='';$('elapsed').textContent='Viagem atual: —';
+}
+function validate(s){
+ if(!s||!Object.hasOwn(labels,s.state)||!s.gpio||!s.travel||!s.error||!s.commissioning||!Number.isFinite(s.uptime_ms)||!Number.isFinite(s.auto_up_remaining_ms))throw Error('Contrato de telemetria inválido');
+ for(const [key] of pins){const p=s.gpio[key];if(!p||!Number.isInteger(p.pin)||typeof p.active!=='boolean')throw Error('GPIO inválido');}
+}
+function render(s){
+ validate(s);
+ if(offline)event(demo?'Simulação local iniciada':'Telemetria restabelecida');
+ if(s.uptime_ms<lastUptime){event('Firmware reiniciado');previous=null;}lastUptime=s.uptime_ms;offline=false;
+ $('connection').textContent=demo?'DEMONSTRAÇÃO LOCAL':'API CONECTADA';$('connection').className='pill ok';
+ $('state').textContent=labels[s.state];$('state').style.color=s.state==='FAULT'?'var(--red)':s.state==='WAIT_AUTO_UP'?'var(--amber)':'var(--green)';
+ $('position').textContent='Posição: '+({TOP:'superior confirmada',BOTTOM:'inferior confirmada',UNKNOWN:'desconhecida / trânsito'}[s.position]||'desconhecida');
+ const travel=s.travel;let ratio=null;
+ if(s.position==='TOP')ratio=1;else if(s.position==='BOTTOM')ratio=0;
+ else if(s.motion==='UP'||s.motion==='DOWN'){const duration=s.motion==='UP'?travel.minimum_up_ms:travel.minimum_down_ms;if(duration>0){ratio=Math.min(.95,Math.max(.05,travel.elapsed_ms/duration));if(s.motion==='DOWN')ratio=1-ratio;}}
+ $('cab').style.bottom=(8+(ratio===null?.5:ratio)*196)+'px';$('cab').textContent=s.motion==='STOPPED'?'PARADO':s.motion==='UP'?'↑ SUBINDO':'↓ DESCENDO';$('cab').classList.toggle('active',(s.gpio.motor_in1.active!==s.gpio.motor_in2.active));
+ $('estimate').textContent=ratio===null?'Sem referência temporal válida. Posição desconhecida.':'Posição estimada, sem encoder. Extremos confirmados apenas pelos sensores.';
+ $('countdown').textContent=s.state==='WAIT_AUTO_UP'?'Subida em '+Math.ceil(s.auto_up_remaining_ms/1000)+' s':'Espera automática inativa';
+ $('wait').max=s.auto_up_wait_ms||10000;$('wait').value=s.state==='WAIT_AUTO_UP'?Math.max(0,$('wait').max-s.auto_up_remaining_ms):0;
+ $('error').textContent=s.error.code==='NONE'?'':s.error.code+' · '+s.error.message+' · '+s.error.state+' @ '+ms(s.error.time_ms);
+ $('braking').textContent=s.motor?.inputs_defined?(s.motor.brake_commanded?'IN1=IN2=0: frenagem elétrica comandada, sem retenção garantida.':'Comando direcional em IN1/IN2. ENABLE fixo; sem corte independente.'):'GPIOs de saída não configurados; estado elétrico não confirmado.';
+ $('blocked').textContent=s.motor_blocked?'Motor bloqueado por configuração, calibração ou falha.':'Intertravamentos ativos. Comandos somente pela lógica local/botão físico.';
+ const c=s.commissioning;
+ $('calibration').textContent=(s.calibrated?'Calibração NVS validada.':'Calibração pendente.')+' '+(c.supervised?(c.armed?'Supervisionado ARMADO. Solte e pressione para o próximo percurso.':'Supervisionado: segure o botão físico para armar.'):(c.automatic_enabled?'Automático configurado.':'Automático desabilitado.'))+(c.pending_save?' Gravando NVS; partida bloqueada.':'')+(!c.limits_confirmed?' Limites físicos ainda não confirmados.':'');
+ $('cycles').textContent='Percursos válidos: subida '+c.up_count+'/'+c.required_cycles+' · descida '+c.down_count+'/'+c.required_cycles;
+ for(const [key,label] of pins){const p=s.gpio[key],card=$('gpio-'+key);card.classList.toggle('active',p.active&&p.enabled!==false&&p.sampled!==false);card.querySelector('b').textContent='GPIO '+p.pin+' · '+(p.sampled===false?'NÃO AMOSTRADO':p.enabled===false?'DESABILITADO':p.active?'ATIVO':'INATIVO');
+ card.querySelector('small').textContent=p.sampled===false?'Amostragem indisponível; consulte falha de configuração.':p.raw!==undefined?'Bruto '+p.raw+' · bruto ativo '+(p.raw_active?'sim':'não')+' · bordas '+p.edges+' · eventos '+p.events+' · mudança '+ms(p.last_change_ms):'Comando '+p.level+' · eventos '+p.events+' · mudança '+ms(p.last_change_ms)+' · sem sensor de saída';
+ if(previous&&p.events!==undefined&&previous.gpio[key].events!==p.events)event(label+' → '+(p.active?'ativo':'inativo')+' · eventos '+p.events);}
+ $('times').replaceChildren();
+ for(const [label,a,b] of [['Último medido',travel.last_up_ms,travel.last_down_ms],['Mínimo histórico válido',travel.minimum_up_ms,travel.minimum_down_ms],['Mínimo físico de segurança',travel.safety_minimum_up_ms,travel.safety_minimum_down_ms],['Máximo físico de segurança',travel.maximum_up_ms,travel.maximum_down_ms]]){const row=document.createElement('tr');for(const value of [label,ms(a),ms(b)]){const cell=document.createElement('td');cell.textContent=value;row.append(cell);}$('times').append(row);}
+ $('elapsed').textContent='Viagem atual: '+ms(travel.elapsed_ms)+' · '+travel.direction;
+ $('ignored').textContent='Pressões ignoradas durante movimento: '+s.ignored_presses;
+ if(previous&&s.state!==previous.state)event(labels[s.state]);
+ $('updated').textContent='Última atualização: '+new Date().toLocaleTimeString('pt-BR')+' · uptime '+ms(s.uptime_ms)+' · '+(demo?'DADOS SIMULADOS':'DADOS REAIS DO FIRMWARE');
+ previous=s;refresh=Math.min(500,Math.max(250,Number(s.refresh_ms)||350));
+}
+const demoStart=Date.now();
+function demoStatus(){
+ const t=(Date.now()-demoStart)%30000;let state,position,motion,elapsed=0,remaining=0;
+ if(t<10000){state='WAIT_AUTO_UP';position='BOTTOM';motion='STOPPED';remaining=10000-t;}
+ else if(t<15000){state='MOVING_UP';position=t<10300?'BOTTOM':'UNKNOWN';motion='UP';elapsed=t-10000;}
+ else if(t<20000){state='IDLE_TOP';position='TOP';motion='STOPPED';}
+ else if(t<25000){state='MOVING_DOWN';position=t<20300?'TOP':'UNKNOWN';motion='DOWN';elapsed=t-20000;}
+ else{state='NEEDS_COMMISSIONING';position='BOTTOM';motion='STOPPED';}
+ const active={limit_top:position==='TOP',limit_bottom:position==='BOTTOM',button:t>=19800&&t<20100,motor_in1:motion==='UP',motor_in2:motion==='DOWN',onboard_led:motion==='STOPPED'||Math.floor(t/250)%2===0};
+ const gpio={};let i=0;for(const [key] of pins){const a=active[key];gpio[key]={pin:[10,1,20,3,4,8][i++],active:a,level:key==='onboard_led'?Number(!a):Number(a),enabled:true};if(i<=3)Object.assign(gpio[key],{raw:key==='button'?Number(!a):Number(a),raw_active:a,events:Math.floor(t/5000),edges:Math.floor(t/2500),last_change_ms:Math.floor(t/5000)*5000});}
+ return{state,position,motion,gpio,motor:{command:motion==='STOPPED'?'BRAKE':motion,inputs_defined:true,brake_commanded:motion==='STOPPED',independent_shutdown:false},calibrated:true,commissioning:{supervised:false,armed:false,automatic_enabled:true,limits_confirmed:true,pending_save:false,up_count:2,down_count:2,required_cycles:2},error:{code:'NONE',message:'',state:'BOOT',time_ms:0},auto_up_remaining_ms:remaining,auto_up_wait_ms:10000,travel:{direction:motion==='STOPPED'?'NONE':motion,elapsed_ms:elapsed,minimum_up_ms:5000,minimum_down_ms:5000,last_up_ms:5100,last_down_ms:5200,safety_minimum_up_ms:3000,safety_minimum_down_ms:3000,maximum_up_ms:9000,maximum_down_ms:9000},ignored_presses:0,motor_blocked:state==='NEEDS_COMMISSIONING',refresh_ms:350,uptime_ms:Date.now()-demoStart};
+}
+async function poll(){
+ if(demo){try{render(demoStatus());}catch(e){stale(e.message);}}
+ else{const abort=new AbortController(),timeout=setTimeout(()=>abort.abort(),1500);
+ try{const response=await fetch('/api/status',{cache:'no-store',signal:abort.signal});if(!response.ok)throw Error('API HTTP '+response.status);render(await response.json());}
+ catch(e){if(!offline)event('Telemetria perdida');stale('Sem confirmação atual da API. '+e.message);}
+ finally{clearTimeout(timeout);}}
+ setTimeout(poll,refresh);
+}
+$('source').textContent=demo?'DEMONSTRAÇÃO LOCAL — dados e movimentos simulados; nenhum hardware conectado.':'DADOS REAIS — monitoramento do firmware via SoftAP. Nenhum comando de motor pela web.';
+poll();
+</script></body></html>

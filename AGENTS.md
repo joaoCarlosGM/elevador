@@ -12,6 +12,7 @@ Você é o agente de desenvolvimento deste repositório. Implemente um firmware 
 2. Todo HTML, CSS e JavaScript da interface deve residir em **um único** `main/index.html`, abrível diretamente no navegador em modo de demonstração.
 3. Não crie outros arquivos `.c`, `.cpp`, `.h`, `.js`, `.css` nem bibliotecas externas da aplicação.
 4. Preserve somente os arquivos auxiliares obrigatórios do ESP-IDF: `CMakeLists.txt` da raiz, `main/CMakeLists.txt`, `main/Kconfig.projbuild` e `AGENTS.md`; `sdkconfig`, `sdkconfig.defaults`, `.gitignore` e saídas de build podem existir conforme as convenções do ESP-IDF. **É impossível oferecer configurações Kconfig sem um arquivo Kconfig e compilar sem CMakeLists; esses arquivos são exceções necessárias à restrição de arquivo único.**
+   Para testes reproduzíveis do PR, permite-se também tests/validate.py: runner sem lógica de aplicação, que gera mocks e executáveis fora do checkout. Não adicionar outras fontes da aplicação.
 5. Use apenas bibliotecas nativas do ESP-IDF (GPIO, Wi-Fi, NVS, esp_timer, esp_http_server, logs, etc.), sem Arduino e sem bibliotecas de terceiros.
 6. Não crie tarefas FreeRTOS próprias. O próprio ESP-IDF, Wi-Fi, `esp_timer` e servidor HTTP usam FreeRTOS internamente, o que não pode ser evitado. Prefira ISR mínima + callbacks curtos do `esp_timer` (por exemplo a cada 10 ms) + handlers HTTP de leitura.
 7. Implementação pequena, legível, com nomes explícitos, funções estáticas bem delimitadas, documentação breve e macros `#define` apenas quando agregarem clareza.
@@ -29,27 +30,27 @@ Placa declarada: **ESP32-C3 Mini**. No formato *SuperMini* usual há LED azul em
 | LED de status onboard | `CONFIG_ELEVATOR_STATUS_LED_GPIO` | 8 | Saída | LED integrado, **se confirmado** |
 | Sensor fim de curso superior | `CONFIG_ELEVATOR_LIMIT_TOP_GPIO` | 10 | Entrada IRQ | Microinterruptor NC para GND, pull-up 3,3 V |
 | Botão único | `CONFIG_ELEVATOR_BUTTON_GPIO` | 20 | Entrada IRQ | Botão NO para GND, pull-up 3,3 V |
-| Enable da ponte H usada | `CONFIG_ELEVATOR_MOTOR_ENABLE_GPIO` | 21 | Saída | L293D pino 1 (1,2EN), com pull-down externo para GND |
 | Reservado | — | 2 | — | GPIO de *strapping*; não usar por padrão |
 
-O ESP32-C3 usa GPIO20/GPIO21 por padrão para **UART0 RX/TX**. Nesta proposta, eles são GPIO comuns; programar/depurar pela **USB Serial/JTAG nativa nos GPIO18/GPIO19**, se disponível. Não prometer logs pela UART0 nesses pinos. Evite GPIO2, GPIO8 e GPIO9 para novos botões/sensores por serem pinos de strapping; GPIO8 apenas LED onboard confirmado. Não usar 18/19 para outra função.
+O ESP32-C3 usa GPIO20/GPIO21 por padrão para **UART0 RX/TX**. Nesta proposta, GPIO20 é botão e GPIO21 não é utilizado pela aplicação; programar/depurar pela **USB Serial/JTAG nativa nos GPIO18/GPIO19**, se disponível. Não usar UART0 nesses pinos enquanto conflitar com o botão; validar também qualquer remapeamento de IN1/IN2. Evite GPIO2, GPIO8 e GPIO9 para novos botões/sensores por serem pinos de strapping; GPIO8 apenas LED onboard confirmado. Não usar 18/19 para outra função.
 
-**L293D, primeira ponte:** pino 1 EN1,2 -> ENABLE; pino 2 IN1 -> GPIO3; pino 7 IN2 -> GPIO4; pinos 3/6 -> motor; pino 16 VCC1 -> lógica 5 V; pino 8 VCC2 -> alimentação apropriada do motor; pinos 4/5/12/13 -> GND comum. Desabilitar segunda ponte (pino 9 em LOW) e fixar entradas IN3/IN4 em nível definido. **VCC2 é obrigatório mesmo usando só uma ponte.** Os sinais de 3,3 V do ESP32-C3 são compatíveis com entradas lógicas TTL do L293D conforme datasheet, mas **nunca aplicar 5 V nos GPIOs ESP32-C3**. Validar corrente de partida/travamento do motor, aquecimento e perdas da ponte antes dos testes.
+**L293D, primeira ponte:** pino 1 EN1,2 permanentemente em HIGH no hardware, sem conexão a GPIO; pino 2 IN1 -> GPIO3; pino 7 IN2 -> GPIO4; pinos 3/6 -> motor; pino 16 VCC1 -> lógica 5 V; pino 8 VCC2 -> alimentação apropriada do motor; pinos 4/5/12/13 -> GND comum. Desabilitar segunda ponte (pino 9 em LOW) e fixar entradas IN3/IN4 em nível definido. **VCC2 é obrigatório mesmo usando só uma ponte.** Os sinais de 3,3 V do ESP32-C3 são compatíveis com entradas lógicas TTL do L293D conforme datasheet, mas **nunca aplicar 5 V nos GPIOs ESP32-C3**. Validar corrente de partida/travamento do motor, aquecimento e perdas da ponte antes dos testes.
 
-**Proteção elétrica:** ENABLE com pull-down externo de ~10 kΩ para manter o motor desabilitado durante reset/boot; IN1 e IN2 também com estados baixos definidos no reset, conforme circuito. Adicionar desacoplamento de alimentação adequado. Fins de curso e botão recebem somente sinais a 3,3 V; se houver fiação longa, considerar proteção contra ruído. **Implementar também limitação física independente de fim de curso e proteção mecânica contra queda.** Uma falha no ESP32 ou no driver não pode expor pessoas a movimento inesperado.
+**Proteção elétrica:** IN1 e IN2 precisam de pull-downs externos para GND (dimensionados para o circuito, tipicamente ~10 kΩ) para estados baixos durante reset, antes de o firmware assumir os pads. O firmware pré-carrega ambos os latches em zero e configura IN1/IN2 como saídas com pull-down interno; isso não comprova o estado elétrico durante ROM/reset, falha de alimentação ou pino avariado. Com ENABLE fixo em HIGH, **IN1=IN2=0 comanda frenagem elétrica**, sem alta impedância ou desenergização independente por software. Essa frenagem não garante retenção estática da carga, principalmente sem alimentação. Exigir retenção mecânica, proteção independente de fim de curso e corte físico da potência da ponte acessível ao operador. Adicionar desacoplamento adequado e nunca aplicar 5 V nos GPIOs. Sensores/botão usam 3,3 V; avaliar proteção contra ruído. Validar corrente de partida/travamento e aquecimento do L293D.
+
 
 ## 2. Kconfig editável via `idf.py menuconfig`
 
 Criar em `main/Kconfig.projbuild` um menu `Elevador — Configuração do Hardware`. Todos os nomes de GPIO, lógica ativa e parâmetros relevantes precisam ser visíveis e editáveis. Organizar em seções descritivas:
 
-- **Pinos**: os seis GPIOs citados e LED onboard; habilitar/desabilitar LED, e permitir LED ativo em nível LOW/HIGH.
+- **Pinos**: os cinco GPIOs de entradas/motor e o LED onboard; habilitar/desabilitar LED, e permitir LED ativo em nível LOW/HIGH.
 - **Entradas**: sensores NC por padrão; estados lógicos ativos parametrizáveis; botão ativo LOW por padrão.
 - **Antirruído**: debounce de fins de curso (ex.: default 35 ms) e botão (ex.: default 50 ms), tempo de amostragem (ex.: 10 ms).
 - **Temporizações**: espera inferior antes de subir (default **10000 ms**), tempos mínimos permitidos independentes por sentido, tempos máximos independentes por sentido, intervalo mínimo entre inversões do motor.
 - **Conectividade**: SSID `Elevador`, senha `12345678` (mínimo 8 caracteres WPA2), número máximo de clientes, intervalo de atualização web.
 - **Comissionamento**: modo de teste supervisionado e opção para habilitar operação automática **somente após** calibração validada. Expor claramente na UI quando ainda não calibrado.
 
-Os `#define` em `main.c` devem padronizar aliases para `CONFIG_ELEVATOR_...`, nomes de estados, durações e níveis lógicos, sem duplicar os valores mágicos. Validar no boot valores duplicados, GPIOs não suportados, seleção de strapping indevida, tempo máximo <= mínimo, senha inválida e conflitos com USB/JTAG/UART. Em erro de configuração, motor permanece OFF; publicar falha em log/interface se possível.
+Os `#define` em `main.c` devem padronizar aliases para `CONFIG_ELEVATOR_...`, nomes de estados, durações e níveis lógicos, sem duplicar os valores mágicos. Validar no boot valores duplicados, GPIOs não suportados, seleção de strapping indevida, tempo máximo <= mínimo, senha inválida e conflitos com USB/JTAG/UART. Em erro de configuração, bloquear movimento e manter IN1=IN2=0 quando o mapa puder ser aplicado com segurança; publicar falha em log/interface se possível.
 
 Documentar como mudar todos os pinos sem editar `main.c`.
 
@@ -59,22 +60,23 @@ Documentar como mudar todos os pinos sem editar `main.c`.
 - ISR deve ser **mínima**, sem `printf`, sem alocação, sem Wi-Fi, sem HTTP, sem NVS e sem bloqueios; apenas marcar eventos/flags e registrar, se seguro, timestamp. Não tomar decisão de direção dentro da ISR.
 - Uma única lógica central reavalia os níveis brutos e consolida estados **estáveis** após debounce com `esp_timer_get_time()` (tempo monotônico), sem `delay` bloqueante.
 - `esp_timer` periódico pode coordenar reamostragem, máquina de estados e LED desde que o callback seja extremamente curto e não execute acesso HTTP/NVS nem bloqueie; quando necessário, deferir operações lentas aos contextos apropriados sem criar tarefas próprias.
-- Priorizar desabilitação do motor ao receber **sinal de limite potencialmente acionado**, sem aguardar a janela de debounce para continuar forçando um limite. Depois, validar o estado estável.
+- Priorizar comando IN1=IN2=0 (frenagem elétrica) ao receber **sinal de limite potencialmente acionado**, sem aguardar a janela de debounce para continuar forçando um limite. Depois, validar o estado estável.
 - Manter `raw_level`, `debounced_active`, `last_change_ms`, `edge_count` e contadores de eventos para cada entrada; exibir níveis brutos e filtrados na API.
 - Button de contato normalmente aberto (NO), ligado ao GND: apenas transição debounced para *pressionado* gera comando. Pressionado continuamente não dispara comandos repetidos.
 - Fins de curso NC para GND com pull-up: circuito fechado = leitura LOW, circuito aberto (pressionado ou cabo rompido) = leitura HIGH. **Um fio rompido pode parecer um fim de curso acionado; detecção absoluta de falhas requer redundância/hardware adicional.** Não alegar cobertura de falhas que o hardware não detecta.
 
-## 4. Driver do motor
+## 4. Driver do motor — somente IN1 e IN2
 
-Saídas independentes:
-- `IN1=1`, `IN2=0`, `ENABLE=1` => direção A;
-- `IN1=0`, `IN2=1`, `ENABLE=1` => direção B;
-- `ENABLE=0`, `IN1=0`, `IN2=0` => saída logicamente desabilitada;
-- `IN1=1`, `IN2=1` => não usar como solução de retenção de carga.
+O ENABLE do L293D está permanentemente habilitado no hardware. Não existe GPIO, Kconfig, escrita de pad ou cartão para esse sinal.
 
-Atribuir direções `UP` e `DOWN` de forma configurável/invertível em Kconfig, pois o sentido físico depende da ligação do motor. Implementar **uma única função autorizada a habilitar a ponte**, que cheque estado, sensores, inicialização, falhas travadas, tempo mínimo entre inversões e duração máxima. Na transição de direção: desabilitar ENABLE, colocar IN1/IN2 em zero, aguardar intervalo seguro configurável, só então comandar nova direção.
+- IN1=1, IN2=0: direção A.
+- IN1=0, IN2=1: direção B.
+- IN1=0, IN2=0: **frenagem elétrica comandada**, ambas as saídas da ponte em nível baixo; não representa alta impedância nem corte independente de energia.
+- IN1=1, IN2=1: não comandar neste projeto.
 
-Desligamento de emergência lógico: `ENABLE=0` imediatamente, IN1=IN2=0, estado `FAULT` travado. Explicar que desligar o motor de uma carga vertical **não garante que ela não caia**; não operar sem retenção mecânica independente.
+Atribuir UP/DOWN de forma configurável em Kconfig. Somente uma função pode comandar movimento direcional, verificando inicialização, origem conhecida, destino livre, falhas, calibração/modo supervisionado, prazos e intervalo mínimo entre comandos. Antes de trocar direção, comandar ambos baixos e aguardar o intervalo configurado, sem delays no callback. Em falha, comandar IN1=IN2=0 no contexto de controle e travar FAULT.
+
+Não existe desenergização independente por software. Falha no MCU, no L293D ou na alimentação pode impedir a frenagem ou provocar movimento. Exigir corte físico de potência e retenção mecânica independente. Frenagem elétrica não garante que uma carga vertical não caia.
 
 ## 5. Máquina de estados explícita
 
@@ -90,14 +92,14 @@ Utilizar `typedef enum` e `switch`, com pelo menos:
 - `FAULT`
 
 Estados e transições:
-1. No reset: inicializar GPIOs mantendo MOTOR OFF, carregar parâmetros NVS e validar mapa de pinos, inicializar debounce, LED e AP. Durante boot o LED pode emitir padrão rápido de *startup* sem ligar o motor.
-2. **Ambos os fins ativos**: `FAULT_BOTH_LIMITS`, MOTOR OFF, travado.
-3. **Somente superior ativo**: `IDLE_TOP`, MOTOR OFF. Botão pressionado validado -> descer se comissionado, sem erros.
+1. No reset: inicializar GPIOs mantendo IN1=IN2=0 (frenagem elétrica), carregar parâmetros NVS e validar mapa de pinos, inicializar debounce, LED e AP. Durante boot o LED pode emitir padrão rápido de *startup* sem ligar o motor.
+2. **Ambos os fins ativos**: `FAULT_BOTH_LIMITS`, IN1=IN2=0 (frenagem elétrica), travado.
+3. **Somente superior ativo**: `IDLE_TOP`, IN1=IN2=0 (frenagem elétrica). Botão pressionado validado -> descer se comissionado, sem erros.
 4. **Somente inferior ativo**: entrar em `WAIT_AUTO_UP` e mostrar contagem real **10 -> 0 segundos**; só depois subir automaticamente **se** comissionado, sem falhas e com condições seguras. Se faltar calibração, `NEEDS_COMMISSIONING` (sem partida automática).
-5. **Nenhum fim ativo no boot**: localização desconhecida (`FAULT_UNKNOWN_POSITION`), MOTOR OFF. Não assumir automaticamente que está no meio do percurso e não iniciar homing cego. A exigência “ir para cima ao ligar” tem precedência apenas quando existe origem segura conhecida; esse compromisso é intencional.
+5. **Nenhum fim ativo no boot**: localização desconhecida (`FAULT_UNKNOWN_POSITION`), IN1=IN2=0 (frenagem elétrica). Não assumir automaticamente que está no meio do percurso e não iniciar homing cego. A exigência “ir para cima ao ligar” tem precedência apenas quando existe origem segura conhecida; esse compromisso é intencional.
 6. Durante movimento: a liberação do fim de partida é esperada; ambos livres é estado normal de trânsito. O acionamento validado do destino encerra o movimento.
 7. Pressionar o botão durante movimento deve **ser registrado na UI**, porém não inverter repentinamente nem criar reativação. Definir política simples (ignorar até completar o curso; não fazer reversão no ar).
-8. Ao parar no limite, MOTOR OFF e atualizar a posição discreta superior/inferior.
+8. Ao parar no limite, IN1=IN2=0 (frenagem elétrica) e atualizar a posição discreta superior/inferior.
 9. Uma nova descida exige pressionamento válido do botão com elevador no topo. Na base, obedecer à espera automática definida.
 10. Qualquer falha crítica permanece travada até reinicialização controlada e diagnóstico; o reset não deve produzir partida inesperada se a falha continuar.
 11. Não criar endpoints HTTP que acionem motor; a web é **somente monitoramento**, salvo autorização futura para controle remoto com projeto de segurança apropriado.
@@ -165,7 +167,6 @@ Não afirmar que “ambos fins livres” = trânsito seguro quando isso ocorrer 
       "button":{"pin":20,"raw":1,"active":false,"edges":12},
       "motor_in1":{"pin":3,"level":0},
       "motor_in2":{"pin":4,"level":0},
-      "motor_enable":{"pin":21,"level":0},
       "onboard_led":{"pin":8,"level":1}
     },
     "auto_up_remaining_ms":10000,
@@ -191,7 +192,7 @@ Estética de um dashboard moderno com fundo escuro, tipografia legível, botões
 1. Cabeçalho “Elevador • ESP32-C3 Mini”, conexão AP e saúde da API.
 2. Animação central do poço e cabine, andando para cima/baixo. Posição superior/inferior confirmada por sensores; em trânsito animar **estimativa temporal** e exibir “posição estimada, sem encoder”.
 3. Estado principal (`BOOT`, `AGUARDANDO`, `SUBINDO`, `DESCENDO`, `SUPERIOR`, `INFERIOR`, `FALHA`, `CALIBRAÇÃO NECESSÁRIA`) e contagem de 10 s com progresso.
-4. Painel diagnóstico: cartões DIV para `GPIO_LIMIT_TOP`, `GPIO_LIMIT_BOTTOM`, `GPIO_BUTTON`, `GPIO_MOTOR_IN1`, `GPIO_MOTOR_IN2`, `GPIO_MOTOR_ENABLE` e `GPIO_STATUS_LED`, cada um com número do GPIO, nível bruto, estado lógico, timestamp/event count e glow verde **somente quando realmente ativo**.
+4. Painel diagnóstico: cartões DIV para `GPIO_LIMIT_TOP`, `GPIO_LIMIT_BOTTOM`, `GPIO_BUTTON`, `GPIO_MOTOR_IN1`, `GPIO_MOTOR_IN2` e `GPIO_STATUS_LED`, cada um com número do GPIO, nível bruto, estado lógico, timestamp/event count e glow verde **somente quando realmente ativo**.
 5. Tempos de viagem e mínimos/máximos; histórico compacto de eventos/sensores na sessão do browser (não fingir logs históricos do firmware).
 6. Falhas com explicação legível e motivo do bloqueio de motor.
 7. Rodapé com última atualização e indicação se dados são reais ou simulação local.
@@ -210,14 +211,14 @@ Codex deve testar ou disponibilizar roteiro reproduzível dos seguintes casos, s
 1. `idf.py set-target esp32c3`, `idf.py menuconfig`, `idf.py build` sem erro na versão ESP-IDF 5.3.1.
 2. Projetos/arquivos sem outras fontes da aplicação além de `main/main.c` e `main/index.html`; somente CMake/Kconfig/metadados obrigatórios.
 3. `menuconfig` altera todos os GPIOs, polaridades e tempos; valores inválidos travam motor.
-4. Saídas começam desabilitadas no boot e no reset; ENABLE tem pull-down externo.
+4. Pré-carregar IN1/IN2 em zero antes de configurar saídas, ativar pull-downs internos; exigir pull-downs externos e medir estados reais no reset/boot. ENABLE permanece habilitado no hardware.
 5. Dois fins acionados => FAULT; nenhum no boot => FAULT; só superior => topo; só inferior => espera se calibrado.
 6. Na base, temporizador de **10,000 ms** antes de subida automática; não mover se não calibrado.
 7. Bounce em ambas bordas dos sensores não causa partidas múltiplas; borda bruta de limite interrompe a energização prontamente.
 8. Botão com bounce gera no máximo 1 comando por pressão; long press não repete, press durante movimento é refletido no painel mas não inverte.
-9. Destino antes do mínimo plausível => motor OFF + `TRAVEL_TOO_FAST`; sem destino até máximo => `TRAVEL_TIMEOUT`.
+9. Destino antes do mínimo plausível => IN1=IN2=0 (frenagem elétrica) + `TRAVEL_TOO_FAST`; sem destino até máximo => `TRAVEL_TIMEOUT`.
 10. Se fim de origem não liberar no limite, falhar; sequência contraditória dos limites também.
-11. Desabilitação do ENABLE e ausência de comando incompatível simultâneo em `IN1/IN2`.
+11. Frenagem IN1=IN2=0 em repouso/falhas; nunca comandar ambos altos; intervalo entre movimentos sem desenergização independente.
 12. LED pisca durante trânsito e usa padrões distintos em idle, espera, falha e boot; LED físico deve ser conferido na placa.
 13. AP aparece como **Elevador** com senha **12345678**, interface acessível por `http://192.168.4.1`.
 14. Web exibe glow correto para **GPIO bruto versus sinal lógico ativo**, e atualização em tempo real do botão, motor e sensores.
@@ -245,3 +246,156 @@ Codex deve testar ou disponibilizar roteiro reproduzível dos seguintes casos, s
 - HTTP Server: https://docs.espressif.com/projects/esp-idf/en/v5.3.1/esp32c3/api-reference/protocols/esp_http_server.html
 - ESP Timer: https://docs.espressif.com/projects/esp-idf/en/v5.3.1/esp32c3/api-reference/system/esp_timer.html
 - ESP32-C3 datasheet: https://documentation.espressif.com/esp32-c3_datasheet_en.html
+
+## 12. Operação, testes reproduzíveis e auditoria do PR
+
+Aplicação exclusivamente em main/main.c e main/index.html; EMBED_TXTFILES embute
+o HTML. Sem tarefas FreeRTOS próprias: esp_timer controla GPIO/debounce/estados;
+a tarefa app_main do IDF realiza NVS e logs. tests/validate.py é o único runner,
+sem lógica de aplicação; gera todos os mocks/executáveis fora do checkout.
+
+### Preparação e compilação
+
+Usar ESP-IDF 5.3.1, alvo esp32c3. Neste ambiente:
+
+~~~bash
+export IDF_TOOLS_PATH=/workspace/.espressif/tools
+export PATH=/workspace/.espressif/host-venv/bin:$PATH
+. /workspace/.espressif/esp-idf-v5.3.1/export.sh
+cd /workspace/elevador
+idf.py --version
+# Somente em checkout novo, sem configuração local a preservar:
+idf.py set-target esp32c3
+idf.py menuconfig
+idf.py build
+~~~
+
+Editar pinos e parâmetros em menuconfig → Elevador — Configuração do Hardware.
+Defaults: IN1=3, IN2=4, inferior=1, superior=10, botão=20, LED=8 (desabilitado
+até confirmação física). GPIO21 não é utilizado. Tempos físicos mínimo/máximo
+começam em zero deliberadamente, provocando GPIO_CONFIGURATION até configuração.
+Automático, supervisionado e confirmação dos limites começam desabilitados.
+
+Com mapa válido, pré-carregar ambos os latches IN1/IN2 em zero **antes** de
+configurar qualquer dessas saídas. Ambas recebem pull-down interno; entradas,
+pull-up e interrupção ANYEDGE. Mesmo com tempos inválidos, o mapa válido permite
+observar sensores e manter frenagem comandada. Mapa inválido não é aplicado.
+Não confundir comando com medição elétrica: estados antes do firmware exigem
+pull-down externo e validação física, inclusive em remapeamentos para pads
+usados pela ROM/UART.
+
+### Comissionamento e persistência
+
+1. Com potência desconectada, verificar sensores NC, GND, VCC1/VCC2, ENABLE fixo,
+   pull-downs IN1/IN2, polaridades, LED8 e sentido físico.
+2. Com retenção mecânica e operador, determinar limites físicos mínimo/máximo
+   por sentido e prazo de liberação da origem. Configurar tempos, confirmar
+   proteção/sentido/limites e habilitar SUPERVISED_TEST, sem AUTOMATIC_ENABLED.
+3. Posicionar manualmente em um fim conhecido, sem potência. Nenhum ou ambos
+   os fins no boot travam o sistema; não há homing cego.
+4. Segurar botão por ARM_HOLD_MS (3000 ms) arma sem mover; soltar e fazer nova
+   pressão para cada percurso, inclusive da base. Pressões em trânsito ou
+   antes do intervalo não ficam enfileiradas. A web nunca comanda o motor.
+5. Completar REQUIRED_CYCLES por sentido (dois), conferir contagens, mínimos
+   e pending_save:false. Apenas viagens válidas e supervisionadas são gravadas,
+   com motor parado em frenagem comandada; gravação pendente impede partida.
+6. Após confirmação física, desabilitar supervisionado, habilitar automático,
+   recompilar e gravar preservando NVS. Esses modos não alteram o fingerprint.
+   Na base esperar 10000 ms; no topo uma pressão inicia descida.
+
+Calibração usa **schema versão 2**: dados do circuito anterior são rejeitados,
+exigindo novo comissionamento, sem promoção automática. Validar CRC, schema,
+fingerprint de pinos/polaridades/sentido/tempos e contagens. NVS ausente permite
+apenas comissionamento supervisionado; corrupção, schema antigo ou configuração
+incompatível travam NVS_OR_CALIBRATION_INVALID. Não há apagamento automático.
+Para recuperação deliberada: desconectar potência, diagnosticar, usar
+idf.py -p PORT erase-flash (destrói dados), regravar com
+idf.py -p PORT flash monitor e repetir integralmente o comissionamento.
+
+A parada bruta comanda frenagem na primeira observação de destino ou borda
+registrada entre amostras, antes do debounce; bounce não provoca religamento.
+A latência depende do escalonamento IDF, sem garantia hard real-time. O histórico
+mínimo nunca reduz o mínimo físico de segurança.
+
+### API e dashboard
+
+GET / serve HTML; GET /api/status retorna exatamente seis GPIOs: limit_top,
+limit_bottom, button, motor_in1, motor_in2 e onboard_led. O objeto motor informa
+command (BRAKE/UP/DOWN), brake_commanded, inputs_defined e
+independent_shutdown:false. BRAKE é comando, sem medição de velocidade,
+corrente ou retenção. Entradas não amostradas usam sampled:false; saídas mostram
+comandos, eventos e timestamps, sem realimentação elétrica.
+GET /api/health retorna 200 saudável ou 503 em falha.
+Sem endpoints de movimento, upload, configuração ou OTA.
+
+A interface distingue bruto/ativo, real/simulado, tempos medidos/históricos/
+limites, posição confirmada/estimada e perda de telemetria. Identifica 00 como
+frenagem elétrica, sem corte independente. Sem cartão fictício de ENABLE.
+file:// seleciona demonstração explicitamente.
+
+### Testes reproduzíveis
+
+Pré-requisitos: Python 3.10+, GCC com AddressSanitizer/UBSan, Node.js,
+Playwright 1.62.1 e Chromium. Dependências são apenas de teste; exemplo isolado:
+
+~~~bash
+mkdir -p /tmp/elevador-test-tools
+npm install --prefix /tmp/elevador-test-tools --no-save --no-package-lock playwright@1.62.1
+NODE_PATH=/tmp/elevador-test-tools/node_modules CHROMIUM_PATH=/usr/bin/chromium python3 tests/validate.py --browser
+~~~
+
+Sem --browser, executa controle, configuração, GPIO/ISR, NVS e handlers.
+Com --browser, falha se Node/Playwright/Chromium não estiverem disponíveis.
+Para reter evidências fora do checkout, adicionar --output /tmp/elevador-evidence.
+Compilação cruzada é check separado: idf.py build.
+
+O harness inclui o mesmo main.c, com GPIO/relógio/ISR/sincronização simulados.
+Cobre ambos os sentidos e fins, bounce/pulsos entre amostras, botão longo/
+repetido/em trânsito, espera exata, mínimo/máximo, origem presa, sequências
+inválidas, intervalo, saídas 00 em falhas e ausência de escrita no GPIO21.
+Confere pré-carga, pull-downs/pull-ups e registro ANYEDGE em initialize_gpio.
+NVS usa backend simulado para load/set_blob/commit/reinício/CRC/schema antigo
+e falhas. HTTP executa handlers reais com transporte simulado; não testa rádio,
+flash física nem servidor executando no ESP32.
+
+No Chromium: 320/360/430/1280 px, seis GPIOs, perda de telemetria, contrato
+inválido, texto escapado e reduced-motion. Se file:// for bloqueado pela
+política, registrar a limitação e testar o ramo demo com seleção simulada,
+sem afirmar abertura direta validada.
+
+### Validações físicas pendentes e riscos
+
+**Nenhum teste físico foi realizado.** Não declarar aprovados GPIO elétrico,
+LED, rádio/AP/DHCP, NVS real, motor, frenagem ou retenção.
+
+- Medir GPIO3/GPIO4 desde power-on/reset/ROM/boot, sem potência inicialmente.
+  Conferir pull-downs externos, polaridades, pulsos e sequência de movimento.
+- ENABLE fixo implica ausência de desligamento independente e alta impedância
+  por software. Falhas de MCU/L293D/alimentação podem provocar movimento ou
+  perda de frenagem. Exigir corte físico de potência e retenção mecânica.
+- Validar fins, ruído/bounce, botão, origem, viagem cedo/timeout, reset em
+  trânsito, NVS ausente/corrompida e latência de frenagem sob carga Wi-Fi.
+- Com retenção/supervisão, validar sentido, corrente/travamento/aquecimento,
+  espera de 10 s, AP Elevador/WPA2, GETs, vários clientes e desconexões.
+- Fio NC rompido segue indistinguível de fim acionado sem hardware extra.
+  Não transportar pessoas/animais; não operar sem supervisão.
+
+O PR deve incluir arquivos, comandos/resultados e limitações. ChatGPT audita
+antes do merge; somente o operador realiza merge e inicia os testes físicos.
+Não realizar merge automaticamente.
+
+### Resultado da validação de software desta entrega (2026-10-24)
+
+- ESP-IDF 5.3.1 / esp32c3: build aprovado, sem avisos/erros do compilador;
+  imagem de aplicação cabe na partição de 1 MiB, com 17% livres.
+- Runner versionado com --browser: 27 cenários no automático e 27 no
+  supervisionado aprovados, mais seis checks com limites não confirmados,
+  um check de tempos zerados e 11 variantes inválidas rejeitadas.
+- Inicialização GPIO, interrupções/pulls, NVS load/write/commit/reload/falhas,
+  três handlers HTTP, JSON/no-store/CSP/buffer e contrato de seis GPIOs aprovados
+  nos mocks descritos acima; ASan/UBSan não reportaram falhas.
+- Chromium: quatro larguras sem overflow, perda de telemetria, texto escapado,
+  reduced-motion, contrato inválido e ramo demo simulando seleção aprovados.
+  Abertura direta por file:// permanece não validada por política do navegador.
+- Testes físicos: **não executados**. Esta aprovação é somente de software;
+  não comprova funcionamento elétrico, frenagem ou segurança do mecanismo.
