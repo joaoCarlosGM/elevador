@@ -102,7 +102,7 @@ function render(data){
  const duration=Number(s==='MOVING_UP'?data.travel.minimum_up_ms:data.travel.minimum_down_ms)||4500;
  const ratio=data.position==='TOP'?1:data.position==='BOTTOM'?0:
  going?(s==='MOVING_UP'?Math.min(.96,elapsed/duration):Math.max(.04,1-elapsed/duration)):.5;
- $('cabin').style.bottom=(10+ratio*175)+'px';$('cabin').classList.toggle('moving',going);
+ $('cabin').style.bottom=(10+ratio*(window.matchMedia('(max-width:590px)').matches?125:175))+'px';$('cabin').classList.toggle('moving',going);
  $('cabin').textContent=going?(s==='MOVING_UP'?'↑ SUBINDO':'↓ DESCENDO'):data.position==='TOP'?'TOPO':data.position==='BOTTOM'?'BASE':'PARADO';
  for(const [id,val] of [['top',data.gpio.limit_top?.active],['bottom',data.gpio.limit_bottom?.active]]){
   $(id).classList.toggle('on',val===true);$(id).querySelector('small').textContent=val===true?'ACIONADO':'LIVRE';
