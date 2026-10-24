@@ -153,7 +153,7 @@ Não afirmar que “ambos fins livres” = trânsito seguro quando isso ocorrer 
 - `WIFI_MODE_AP` com SSID **Elevador**, senha **12345678** default, WPA2-PSK, IP normalmente **192.168.4.1**; SSID/senha configuráveis via Kconfig.
 - Inicializar NVS, `esp_netif`, event loop padrão, driver Wi-Fi e DHCP do AP; sem conexão STA, sem internet, sem serviços externos.
 - Servidor HTTP nativo `esp_http_server`; usar no mínimo `GET /`, `GET /api/status`, `GET /api/health`.
-- `GET /` -> servir o único `main/index.html` da flash como `text/html; charset=utf-8`.
+- `GET /dashboard` -> servir o único `main/index.html` da flash como `text/html; charset=utf-8`.
 - `GET /api/status` -> JSON pequeno com valores reais do firmware, sem cache e sem impedir o controle do motor. Exemplo de contrato:
   ```
   {
@@ -187,7 +187,7 @@ No `main/CMakeLists.txt`, usar `idf_component_register(SRCS "main.c" INCLUDE_DIR
 
 ## 9. UI/UX responsiva e auditoria de GPIOs
 
-Estética de um dashboard moderno com fundo escuro, tipografia legível, botões não enganosos (nenhum botão “subir/descer” se a web não controla o motor), brilho/glow verde indicando sinal ativo, âmbar para espera, vermelho para falha. Tudo em **`main/index.html`**, com CSS em `<style>` e JS em `<script>`, sem CDN, imagens remotas ou dependências.
+Estética de um dashboard moderno com fundo escuro, tipografia legível, botões identificados como simulação local, sem acionamento remoto do motor, brilho/glow verde indicando sinal ativo, âmbar para espera, vermelho para falha. Tudo em **`main/index.html`**, com CSS em `<style>` e JS em `<script>`, sem CDN, imagens remotas ou dependências.
 
 Áreas:
 1. Cabeçalho “Elevador • ESP32-C3 Mini”, conexão AP e saúde da API.
@@ -320,7 +320,7 @@ mínimo nunca reduz o mínimo físico de segurança.
 
 ### API e dashboard
 
-GET / serve HTML; GET /api/status retorna exatamente seis GPIOs: limit_top,
+GET /dashboard serve HTML; GET /api/status retorna exatamente seis GPIOs: limit_top,
 limit_bottom, button, motor_in1, motor_in2 e onboard_led. O objeto motor informa
 command (BRAKE/UP/DOWN/UNKNOWN), brake_commanded, inputs_defined e
 independent_shutdown:false. BRAKE é comando, sem medição de velocidade,

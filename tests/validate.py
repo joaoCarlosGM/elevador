@@ -489,7 +489,7 @@ const assert=require('assert');
   }
   return route.fulfill({contentType:'text/html',body:fs.readFileSync(process.env.ELEVATOR_HTML,'utf8')});
  });
- await live.goto('http://elevator.test/');
+ await live.goto('http://elevator.test/dashboard');
  await live.waitForFunction(()=>document.querySelector('#connection').textContent==='API CONECTADA');
  assert(await live.locator('#gpio-limit_top').evaluate(e=>e.classList.contains('active')));
  assert((await live.locator('#gpio-limit_top small').textContent()).includes('Bruto 0'));
@@ -552,6 +552,7 @@ def validate(output, browser):
     assert sorted(p.name for p in (ROOT / "main").glob("*.c")) == ["main.c"]
     assert 'EMBED_TXTFILES "index.html"' in (ROOT / "main/CMakeLists.txt").read_text()
     assert source.count(".uri=") == 3 and source.count(".method=HTTP_GET") == 3 and "xTaskCreate" not in source
+    assert '.uri="/dashboard"' in source and '.uri="/"' not in source
     assert "default 3" in kconfig and "default 4" in kconfig
     print("PASS minimal architecture and removal regression")
     control = output / "control.txt"
