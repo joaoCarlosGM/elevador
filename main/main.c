@@ -486,6 +486,15 @@ static void no_cache(httpd_req_t *req)
 extern const unsigned char index_html_start[] asm("_binary_index_html_start");
 extern const unsigned char index_html_end[] asm("_binary_index_html_end");
 #define ELEVATOR_INDEX_HTML ((const char *)index_html_start)
+extern const unsigned char control_html_start[] asm("_binary_control_html_start");
+extern const unsigned char control_html_end[] asm("_binary_control_html_end");
+static esp_err_t root_control_handler(httpd_req_t *req)
+{
+    no_cache(req); httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
+    return httpd_resp_send(req, (const char *)control_html_start,
+        control_html_end - control_html_start - 1);
+}
 static esp_err_t index_handler(httpd_req_t *req)
 {
     no_cache(req); httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -614,6 +623,7 @@ static esp_err_t start_web(void)
     httpd_handle_t server = NULL;
     TRY(httpd_start(&server, &cfg));
     const httpd_uri_t routes[] = {
+        {.uri="/", .method=HTTP_GET, .handler=root_control_handler},
         {.uri="/dashboard", .method=HTTP_GET, .handler=index_handler},
         {.uri="/api/status", .method=HTTP_GET, .handler=status_handler},
         {.uri="/api/health", .method=HTTP_GET, .handler=health_handler}
