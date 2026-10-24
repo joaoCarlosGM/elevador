@@ -63,19 +63,22 @@ typedef enum { BOOT, NEEDS_COMMISSIONING, IDLE_TOP, IDLE_BOTTOM,
 typedef enum { NONE, BOTH_LIMITS_ACTIVE, UNKNOWN_POSITION_AT_BOOT,
     GPIO_CONFIGURATION, TRAVEL_TOO_FAST, TRAVEL_TIMEOUT, UNEXPECTED_LIMIT,
     LIMIT_SENSOR_INCONSISTENT, START_LIMIT_NOT_RELEASED,
-    NVS_OR_CALIBRATION_INVALID, AP_OR_HTTP_FAILURE, GPIO_WRITE_FAILURE } fault_t;
+    NVS_OR_CALIBRATION_INVALID, AP_OR_HTTP_FAILURE, GPIO_WRITE_FAILURE,
+    REMOTE_STOP_REQUESTED } fault_t;
 static const char *const state_names[] = {"BOOT","NEEDS_COMMISSIONING","IDLE_TOP",
     "IDLE_BOTTOM","WAIT_AUTO_UP","MOVING_UP","MOVING_DOWN","FAULT"};
 static const char *const fault_names[] = {"NONE","BOTH_LIMITS_ACTIVE",
     "UNKNOWN_POSITION_AT_BOOT","GPIO_CONFIGURATION","TRAVEL_TOO_FAST",
     "TRAVEL_TIMEOUT","UNEXPECTED_LIMIT","LIMIT_SENSOR_INCONSISTENT",
-    "START_LIMIT_NOT_RELEASED","NVS_OR_CALIBRATION_INVALID","AP_OR_HTTP_FAILURE","GPIO_WRITE_FAILURE"};
+    "START_LIMIT_NOT_RELEASED","NVS_OR_CALIBRATION_INVALID","AP_OR_HTTP_FAILURE","GPIO_WRITE_FAILURE",
+    "REMOTE_STOP_REQUESTED"};
 static const char *const fault_messages[] = {"Sem falha", "Ambos os fins ativos",
     "Posicao desconhecida no boot", "Pinos, console, senha ou tempos invalidos",
     "Destino antes do minimo fisico", "Tempo maximo excedido",
     "Fim mudou sem movimento ordenado", "Sequencia dos fins inconsistente",
     "Fim de origem nao liberou", "NVS ou calibracao invalida",
-    "Falha de AP ou HTTP; motor bloqueado", "Falha de escrita GPIO; comando nao confirmado"};
+    "Falha de AP ou HTTP; motor bloqueado", "Falha de escrita GPIO; comando nao confirmado",
+    "Pedido de parada pela pagina; sem corte independente"};
 typedef struct {
     int pin, active_level, raw_level;
     bool debounced_active, initialized, edge_seen;
@@ -96,6 +99,7 @@ typedef struct {
     bool destination_pending, armed, arm_release_needed, calibration_dirty;
     bool calibration_valid, nvs_ok, web_ok, position_top, gpio_write_failed;
     bool output_known[3];
+    bool web_stop_requested; /* HTTP queues; timer owns GPIO writes */
     int failed_gpio_pin, gpio_error;
     int motor_in1, motor_in2, led_level;
     uint32_t ignored_presses, last_up_ms, last_down_ms, generation;
@@ -356,6 +360,11 @@ static void control_tick(void *arg)
     portENTER_CRITICAL(&control_mux);
     ctl.now_ms = clock_ms();
     if (!ctl.pins_ready) { portEXIT_CRITICAL(&control_mux); return; }
+    if (ctl.web_stop_requested) {
+        ctl.web_stop_requested = false;
+        /* Software-only stop; not an independent hardware power cut. */
+        fail(REMOTE_STOP_REQUESTED);
+    }
     sample(&ctl.top, CONFIG_ELEVATOR_LIMIT_DEBOUNCE_MS);
     sample(&ctl.bottom, CONFIG_ELEVATOR_LIMIT_DEBOUNCE_MS);
     bool pressed = sample(&ctl.button, CONFIG_ELEVATOR_BUTTON_DEBOUNCE_MS);
@@ -591,6 +600,18 @@ static esp_err_t health_handler(httpd_req_t *req)
     if (!healthy) httpd_resp_set_status(req, "503 Service Unavailable");
     return httpd_resp_sendstr(req, healthy ? "{\"healthy\":true}" : "{\"healthy\":false}");
 }
+static esp_err_t stop_handler(httpd_req_t *req)
+{
+    /* STOP cannot energize the motor nor clear fault latches. */
+    portENTER_CRITICAL(&control_mux);
+    ctl.web_stop_requested = true;
+    portEXIT_CRITICAL(&control_mux);
+    no_cache(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, "202 Accepted");
+    return httpd_resp_sendstr(req,
+        "{\"accepted\":true,\"note\":\"software_only_not_power_cut\"}");
+}
 static void wifi_event(void *arg, esp_event_base_t base, int32_t event, void *data)
 {
     (void)arg; (void)base; (void)data;
@@ -626,7 +647,8 @@ static esp_err_t start_web(void)
         {.uri="/", .method=HTTP_GET, .handler=root_control_handler},
         {.uri="/dashboard", .method=HTTP_GET, .handler=index_handler},
         {.uri="/api/status", .method=HTTP_GET, .handler=status_handler},
-        {.uri="/api/health", .method=HTTP_GET, .handler=health_handler}
+        {.uri="/api/health", .method=HTTP_GET, .handler=health_handler},
+        {.uri="/api/control/stop", .method=HTTP_POST, .handler=stop_handler}
     };
     for (unsigned i = 0; i < sizeof(routes)/sizeof(routes[0]); ++i) {
         err = httpd_register_uri_handler(server, &routes[i]);
