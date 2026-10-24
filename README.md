@@ -2,7 +2,7 @@
 
 Firmware experimental para um **elevador de bancada**, com motor DC, dois fins de curso, botão local, LED onboard e painel de telemetria Wi-Fi. Não usar para transportar pessoas/animais nem operar carga suspensa sem retenção mecânica independente.
 
-> **Endereços:** `http://192.168.4.1/` abre o **painel de controle** com botões SUBIR, DESCER e PARAR. `http://192.168.4.1/dashboard` continua sendo o **dashboard de diagnóstico**. Os botões **não acionam o motor real**: ficam desabilitados quando a página roda no ESP32 e são interativos apenas na demonstração offline do arquivo `main/control.html`. Não existe endpoint HTTP de movimento; o botão físico continua responsável pela atuação.
+> **Endereços:** `http://192.168.4.1/` mostra a **página de controle real** com SUBIR, DESCER e PARAR; `http://192.168.4.1/dashboard` é o diagnóstico detalhado. O acionamento pela web é opcional e **desabilitado por padrão**. Se o comissionamento e o modo web não estiverem habilitados, SUBIR/DESCER ficam indisponíveis; o arquivo HTML aberto localmente oferece apenas simulação.
 
 ## 1. Pinagem padrão (ESP32-C3 Mini)
 
@@ -66,7 +66,7 @@ O L293D possui **duas alimentações distintas**: VCC1 (lógica) e VCC2 (motor),
 
 O dashboard mostra fins de curso, botão, IN1/IN2, LED, temporizações, calibração, falhas e animação de posição **estimada**, não medição com encoder.
 
-Os arquivos `main/control.html` e `main/index.html` podem ser abertos localmente no navegador, em demonstração explícita. Nenhum botão remoto é habilitado quando servidos pelo ESP32.
+O arquivo `main/control.html` também pode ser aberto isoladamente como demonstração simulada. No ESP32, os comandos reais passam exclusivamente por POST `/api/control/up`, `/api/control/down` e `/api/control/stop`, com validação do estado e dos fins de curso. **Segure** SUBIR/DESCER para manter o movimento. Soltar envia PARAR e a ausência de comandos por mais de 600 ms (padrão configurável) aciona frenagem e trava a falha. O servidor não altera GPIO diretamente.
 
 ## 5. Compilar (ESP-IDF 5.3.1)
 
@@ -79,7 +79,7 @@ idf.py -p COM5 flash monitor
 
 Substituir `COM5` pela porta do seu dispositivo. Em checkout já configurado, evitar executar `set-target` desnecessariamente para não perder `sdkconfig`.
 
-**Valores iniciais seguros:** tempos de percurso mínimos/máximos começam em zero e motor fica bloqueado até configurar limites físicos válidos, confirmar a pinagem, e realizar comissionamento supervisionado conforme `AGENTS.md`. A operação automática requer calibração NVS válida e habilitação explícita.
+**Valores iniciais seguros:** tempos de percurso mínimos/máximos começam em zero, impedindo movimento até que limites físicos sejam configurados. Para habilitar o modo remoto, é necessário em `menuconfig`: (1) indicar tempos mínimos e máximos reais por sentido; (2) confirmar sentido do motor e polaridade dos sensores com a fonte do motor desligada; (3) marcar `ELEVATOR_LIMITS_CONFIRMED` **somente após verificação física**; (4) desabilitar os modos automático e supervisionado; (5) alterar a senha padrão do AP para outra senha WPA2 forte; e (6) habilitar `ELEVATOR_WEB_CONTROL_ENABLED`, apenas quando houver proteção física e desligamento independente. O modo web manual não precisa da calibração NVS por ciclos, mas exige NVS inicializável e todos os demais intertravamentos. Uma vez gravada uma falha de movimento ou parada manual durante percurso, não há religamento até reinicialização com origem segura conhecida. Isso não substitui retenção mecânica nem parada de potência.
 
 ## 6. Organização
 
@@ -103,7 +103,18 @@ A lógica do dispositivo reside exclusivamente em `main/main.c`; as duas página
 
 ## 7. Limitações e validação
 
-- Comandos da página: **simulação**, não movimentam o motor real.
-- Controle real do motor: **botão físico e máquina de estados local**; sem controle via HTTP.
+- Comandos da página: **reais apenas quando o modo web for habilitado e os intertravamentos permitirem**; no modo local `file://`, somente simulação.
+- O controle HTTP não aciona saídas diretamente; somente a máquina de estados temporizada escreve IN1/IN2.
+- O botão PARAR comanda **frenagem lógica**, não corte independente da alimentação. Perda de Wi-Fi provoca parada pela lógica, desde que o ESP32 e a ponte estejam funcionando corretamente.
+- A maquete não deve transportar pessoas ou animais; movimento inesperado ou falha elétrica exigem desligamento físico da potência antes de novos testes.
 - Nenhum teste em hardware está implícito pela compilação ou pelo runner de mocks.
 - A segurança de uma carga suspensa não pode depender exclusivamente do ESP32 e do L293D, principalmente com EN fixo HIGH.
+
+## 8. Intertravamentos do controle web
+
+- Posição inicial reconhecida obrigatoriamente em **um dos fins de curso**, não no meio do percurso.
+- Os dois fins ativos, nenhum fim ativo na partida, sinal inconsistente, tempo máximo excedido ou escrita GPIO falha: **FAULT travada**.
+- SUBIR somente a partir da base, DESCER somente a partir do topo; sem reversão durante a marcha.
+- Comunicação perdida, soltura do botão ou PARAR durante movimento: pede `IN1=IN2=0`, registra falha travada e exige nova inspeção.
+- Modo web e modo automático são mutuamente exclusivos; não há subida automática após 10 segundos nesse modo.
+- **Resistor pull-up/pull-down é escolha elétrica, não inversão da definição lógica**: se a sua fiação está ligada entre GPIO e GND, mantenha `GPIO_PULLUP_ENABLE` e confira `LIMIT_*_ACTIVE_LEVEL` pela leitura real. A lógica padrão NC abre=HIGH; altere o nível ativo somente se a topologia do interruptor exigir. Não faça merge no PR #4 (pull-down para 3V3) sem alterar fisicamente os contatos.

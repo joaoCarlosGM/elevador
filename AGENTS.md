@@ -438,3 +438,22 @@ permanecem desabilitados. Isso não representa validação de comando remoto fí
 Com o erro `BOTH_LIMITS_ACTIVE` registrado em bancada e sem corte independente da ponte,
 não habilitar acionamento físico pela web nem suprimir intertravamentos.
 Testar ambas as rotas, o HTML embutido e o comportamento desabilitado no modo real.
+
+
+### Modo de controle web real (maquete)
+
+O modo `CONFIG_ELEVATOR_WEB_CONTROL_ENABLED` é opt-in e incompatível com
+`CONFIG_ELEVATOR_AUTOMATIC_ENABLED` e `CONFIG_ELEVATOR_SUPERVISED_TEST`.
+A API expõe POST /api/control/up, /api/control/down, /api/control/stop; a tarefa
+HTTP **não manipula GPIOs**, apenas atualiza intenção protegida pelo mesmo
+mutex do controlador. Somente `control_tick` comanda os sinais IN1/IN2.
+Os pedidos de direção somente são aceitos com um fim de origem conhecido,
+destino inativo, entradas estáveis, sem falha travada, tempos válidos e
+confirmação física. O movimento depende de requisições periódicas enquanto
+um botão é segurado (hold-to-run), e perde autorização ao soltar ou após
+o timeout. Parada em trânsito é falha travada, e a posição após parada
+não é presumida. O modo manual remoto não exige calibração NVS por ciclos,
+mas exige tempos/configuração seguros, NVS inicializada, AP íntegro, senha
+forte e confirmação explícita de limite/proteção independente.
+O ENABLE continua fixo HIGH e IN1=IN2=0 é apenas frenagem lógica.
+Não declarar segurança funcional sem desligamento de potência independente.

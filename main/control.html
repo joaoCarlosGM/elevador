@@ -72,7 +72,7 @@ footer{margin-top:20px;font-size:.83rem;line-height:1.6;color:#aabcce}
 </section>
 <footer>
 <a href="/dashboard">Abrir dashboard de diagnóstico</a>
-<p>Controles de movimento funcionam apenas no modo demonstração local (arquivo aberto diretamente no navegador). No ESP32, os botões ficam desabilitados: não há endpoint HTTP que mova o motor. A frenagem elétrica do L293D não garante retenção de carga vertical. Nenhum comando da página contorna falhas de fim de curso.</p>
+<p>Segure SUBIR ou DESCER para mover. Soltar envia PARAR; a perda de comunicação também faz o firmware solicitar frenagem. O STOP é lógico: não desliga a potência do L293D. Falha de fim de curso, posição desconhecida ou parada durante um percurso exigem diagnóstico antes de rearmar. Nunca use em elevadores para pessoas.</p>
 </footer>
 </main>
 <script>
@@ -81,6 +81,39 @@ const $=id=>document.getElementById(id);
 const isDemo=location.protocol==='file:';
 const states={BOOT:'INICIALIZANDO',NEEDS_COMMISSIONING:'CALIBRAÇÃO PENDENTE',IDLE_TOP:'NO TOPO',IDLE_BOTTOM:'NA BASE',WAIT_AUTO_UP:'AGUARDANDO SUBIDA',MOVING_UP:'SUBINDO',MOVING_DOWN:'DESCENDO',FAULT:'FALHA — MOVIMENTO BLOQUEADO'};
 let demoAction='BOTTOM',demoAt=Date.now();
+let online=false,remoteReady=false,activeHold=null,inFlight=false,heartbeat=null;
+async function command(action){
+ if(isDemo)return true;
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),900);
+ try{
+  const res=await fetch('/api/control/'+action.toLowerCase(),{method:'POST',cache:'no-store',signal:controller.signal});
+  if(!res.ok)throw Error('HTTP '+res.status);
+  return true;
+ }catch(err){
+  $('mode').textContent='Comando não aceito: '+err.message+'. Se houver movimento, desligue a potência fisicamente.';
+  return false;
+ }finally{clearTimeout(timer);}
+}
+async function sendHeartbeat(){
+ if(!activeHold||inFlight||!online)return;
+ inFlight=true;
+ const ok=await command(activeHold);
+ inFlight=false;
+ if(!ok)stopHold();
+}
+function stopHold(){
+ if(heartbeat!==null){clearInterval(heartbeat);heartbeat=null;}
+ if(!activeHold)return;
+ activeHold=null;
+ if(!isDemo)void command('STOP');
+}
+function beginHold(action){
+ if(isDemo)return;
+ if(activeHold||!remoteReady||!online)return;
+ activeHold=action;
+ void sendHeartbeat();
+ heartbeat=setInterval(sendHeartbeat,180);
+}
 function demo(){
  const elapsed=Date.now()-demoAt;
  if(demoAction==='UP'&&elapsed>=4500)demoAction='TOP';
@@ -109,11 +142,19 @@ function render(data){
  }
  $('motor').classList.toggle('on',going);$('motor').querySelector('small').textContent=going?'EM MOVIMENTO':'PARADO';
  $('updated').textContent='Última leitura: '+new Date().toLocaleTimeString('pt-BR')+(isDemo?' · SIMULADA':' · API REAL');
+ online=true;
+ remoteReady=!!data.remote?.ready && data.remote?.enabled===true && s!=='FAULT' && !data.motor_blocked;
  $('mode').textContent=isDemo?'DEMONSTRAÇÃO: os botões simulam movimentos; nenhum hardware é acionado.':
-  'CONTROLE REMOTO DESABILITADO. O ESP32 aceita apenas monitoramento; utilize o botão físico após validação dos sensores.';
- $('up').disabled=!isDemo;$('down').disabled=!isDemo;$('stop').disabled=!isDemo;
+  !data.remote?.enabled?'Controle real desligado no menuconfig. Proteções da maquete exigem verificação.':
+  s==='FAULT'?'FALHA ATIVA: comandos bloqueados; confira fins de curso e parada elétrica.':
+  remoteReady?'SEGURE o botão para mover; SOLTE para parar. Parada não corta a potência.':
+  'Movimento bloqueado: confirme a origem, os fins de curso e a configuração.';
+ $('up').disabled=!isDemo&&!(remoteReady&&(data.position==='BOTTOM'||s==='MOVING_UP'));
+ $('down').disabled=!isDemo&&!(remoteReady&&(data.position==='TOP'||s==='MOVING_DOWN'));
+ $('stop').disabled=!isDemo&&!online;
 }
 function stale(message){
+ online=false;remoteReady=false;stopHold();
  $('connection').textContent='SEM TELEMETRIA';$('status').textContent='SEM CONFIRMAÇÃO';$('status').className='status fault';
  $('details').textContent=message;$('cabin').textContent='SEM DADOS';$('cabin').classList.remove('moving');
  for(const id of ['top','bottom','motor']){$(id).classList.remove('on');$(id).querySelector('small').textContent='DESCONHECIDO';}
@@ -122,11 +163,29 @@ function stale(message){
 }
 for(const [id,action] of [['up','UP'],['down','DOWN'],['stop','STOP']]){
  $(id).addEventListener('click',()=>{
-  if(!isDemo)return;
-  demoAction=action==='STOP'?'STOP':action;demoAt=Date.now();
-  render(demo());
+  if(isDemo){demoAction=action==='STOP'?'STOP':action;demoAt=Date.now();render(demo());}
+  else if(action==='STOP'){stopHold();void command('STOP');}
  });
+ if(action!=='STOP'){
+  $(id).addEventListener('pointerdown',e=>{
+   if(isDemo)return;
+   e.preventDefault();
+   try{$(id).setPointerCapture(e.pointerId);}catch(_){}
+   beginHold(action);
+  });
+  $(id).addEventListener('keydown',e=>{
+   if(!isDemo&&e.repeat===false&&(e.key===' '||e.key==='Enter')){e.preventDefault();beginHold(action);}
+  });
+  $(id).addEventListener('keyup',e=>{
+   if(!isDemo&&(e.key===' '||e.key==='Enter'))stopHold();
+  });
+ }
 }
+document.addEventListener('pointerup',stopHold);
+document.addEventListener('pointercancel',stopHold);
+window.addEventListener('blur',stopHold);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopHold();});
+window.addEventListener('pagehide',stopHold);
 async function poll(){
  if(isDemo){try{render(demo());}catch(e){stale(e.message);}}
  else{
