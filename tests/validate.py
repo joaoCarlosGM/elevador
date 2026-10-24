@@ -38,9 +38,9 @@ typedef int esp_err_t;
 #define CONFIG_ELEVATOR_STATUS_LED_ENABLED 1
 #define CONFIG_ELEVATOR_STATUS_LED_ACTIVE_LEVEL 0
 #define CONFIG_ELEVATOR_MOTOR_UP_IN1_HIGH 1
-#define CONFIG_ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL 1
-#define CONFIG_ELEVATOR_LIMIT_BOTTOM_ACTIVE_LEVEL 1
-#define CONFIG_ELEVATOR_BUTTON_ACTIVE_LEVEL 0
+#define CONFIG_ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL 0
+#define CONFIG_ELEVATOR_LIMIT_BOTTOM_ACTIVE_LEVEL 0
+#define CONFIG_ELEVATOR_BUTTON_ACTIVE_LEVEL 1
 #define CONFIG_ELEVATOR_AUTO_UP_WAIT_MS 10000
 #ifndef CONFIG_ELEVATOR_MIN_UP_MS
 #define CONFIG_ELEVATOR_MIN_UP_MS 1000
@@ -104,19 +104,20 @@ static void fresh(int top,int bottom,bool calibrated)
 {
     memset(&ctl,0,sizeof(ctl));memset(levels,0,sizeof(levels));memset(gpio_calls,0,sizeof(gpio_calls));simulated_ms=0;commands=0;
     fail_pin=-1;fail_level=-1;fail_skip=0;fail_remaining=0;
-    levels[10]=top;levels[1]=bottom;levels[20]=1;
+    /* top/bottom are logical activation flags; NC GPIO values invert them. */
+    levels[10]=!top;levels[1]=!bottom;levels[20]=0;
     ctl=(controller_t){.state=BOOT,.pins_ready=true,.web_ok=true,.nvs_ok=true,.output_known={true,true,true},
-        .top={.pin=10,.active_level=1,.raw_level=top},
-        .bottom={.pin=1,.active_level=1,.raw_level=bottom},
-        .button={.pin=20,.active_level=0,.raw_level=1}};
+        .top={.pin=10,.active_level=0,.raw_level=!top},
+        .bottom={.pin=1,.active_level=0,.raw_level=!bottom},
+        .button={.pin=20,.active_level=1,.raw_level=0}};
     ctl.cal=(calibration_t){.magic=CAL_MAGIC,.version=CAL_VERSION,.fingerprint=fingerprint(),
         .minimum_up_ms=calibrated?1200:0,.minimum_down_ms=calibrated?1200:0,
         .up_count=calibrated?2:0,.down_count=calibrated?2:0};
     ctl.cal.crc=calibration_crc(&ctl.cal);ctl.calibration_valid=calibration_complete();
     advance(60);
 }
-static void press(void) { edge(20,0);advance(70); }
-static void release(void) { edge(20,1);advance(70); }
+static void press(void) { edge(20,1);advance(70); }
+static void release(void) { edge(20,0);advance(70); }
 static void begin_down(void)
 {
     fresh(1,0,true);advance(500);
@@ -125,9 +126,9 @@ static void begin_down(void)
 #endif
     press();assert(ctl.state==MOVING_DOWN&&ctl.drive_commanded);
 }
-static void release_origin(void) { edge(10,0);advance(100);assert(ctl.origin_released); }
+static void release_origin(void) { edge(10,1);advance(100);assert(ctl.origin_released); }
 static void at_elapsed(unsigned t) { assert(simulated_ms-ctl.command_ms<=t);advance(t-(simulated_ms-ctl.command_ms)); }
-static void arrive_bottom(void) { edge(1,1);advance(10);assert(!ctl.drive_commanded);advance(50); }
+static void arrive_bottom(void) { edge(1,0);advance(10);assert(!ctl.drive_commanded);advance(50); }
 static int cases;
 #define CASE(name) for(int once=(printf("TEST %s ... ",name),1);once;once=0,++cases,puts("PASS"))
 int main(void)
@@ -141,7 +142,15 @@ int main(void)
     }
     CASE("both limits fault stays latched") {
         fresh(1,1,true);assert(ctl.fault==BOTH_LIMITS_ACTIVE&&!ctl.drive_commanded);
-        edge(1,0);advance(1000);assert(ctl.state==FAULT);assert(!motor_start(false));
+        assert(levels[1]==0&&levels[10]==0); /* both NC contacts open */
+        edge(1,1);advance(1000);assert(ctl.state==FAULT);assert(!motor_start(false));
+    }
+    CASE("NC sensor and NO button electrical polarity") {
+        fresh(1,0,true);
+        assert(levels[10]==0&&levels[1]==1&&levels[20]==0);
+        assert(raw_active(&ctl.top)&&!raw_active(&ctl.bottom)&&!raw_active(&ctl.button));
+        edge(20,1);advance(70);assert(levels[20]==1&&raw_active(&ctl.button));
+        edge(20,0);advance(70);assert(levels[20]==0&&!raw_active(&ctl.button));
     }
     CASE("unknown boot never homes") { fresh(0,0,true);advance(20000);assert(ctl.fault==UNKNOWN_POSITION_AT_BOOT&&commands==0); }
     CASE("missing calibration never starts automatically") { fresh(0,1,false);advance(20000);assert(ctl.state==NEEDS_COMMISSIONING&&commands==0); }
@@ -209,7 +218,7 @@ int main(void)
     CASE("destination stop write failure latches unknown output and no calibration") {
         begin_down();release_origin();at_elapsed(1200);
         uint32_t cycles=ctl.cal.down_count;int before=commands;
-        fail_pin=4;fail_level=0;fail_remaining=-1;edge(1,1);advance(60);
+        fail_pin=4;fail_level=0;fail_remaining=-1;edge(1,0);advance(60);
         assert(ctl.fault==GPIO_WRITE_FAILURE&&ctl.state==FAULT&&!ctl.drive_commanded);
         assert(levels[4]==1&&ctl.motor_in2==1&&!ctl.output_known[1]);
         assert(ctl.last_down_ms==0&&ctl.cal.down_count==cycles&&!ctl.calibration_dirty);
@@ -248,10 +257,10 @@ int main(void)
     }
     CASE("travel timeout") { begin_down();release_origin();at_elapsed(5010);assert(ctl.fault==TRAVEL_TIMEOUT&&!ctl.drive_commanded); }
     CASE("origin release deadline") { begin_down();at_elapsed(1500);assert(ctl.fault==START_LIMIT_NOT_RELEASED&&!ctl.drive_commanded); }
-    CASE("origin reassertion fails immediately") { begin_down();release_origin();edge(10,1);advance(10);assert(ctl.fault==LIMIT_SENSOR_INCONSISTENT&&!ctl.drive_commanded); }
+    CASE("origin reassertion fails immediately") { begin_down();release_origin();edge(10,0);advance(10);assert(ctl.fault==LIMIT_SENSOR_INCONSISTENT&&!ctl.drive_commanded); }
     CASE("bounce destination never reenergizes") {
-        begin_down();release_origin();at_elapsed(1200);edge(1,1);advance(10);int count=commands;
-        edge(1,0);advance(10);edge(1,1);advance(10);edge(1,0);advance(100);
+        begin_down();release_origin();at_elapsed(1200);edge(1,0);advance(10);int count=commands;
+        edge(1,1);advance(10);edge(1,0);advance(10);edge(1,1);advance(100);
         assert(ctl.fault==LIMIT_SENSOR_INCONSISTENT&&commands==count&&!ctl.drive_commanded);
     }
     CASE("button bounce one command; hold and transit press ignored") {
@@ -259,11 +268,11 @@ int main(void)
 #ifdef TEST_SUPERVISED
         press();advance(3000);release();
 #endif
-        for(int i=0;i<3;i++){edge(20,0);advance(10);edge(20,1);advance(10);}
+        for(int i=0;i<3;i++){edge(20,1);advance(10);edge(20,0);advance(10);}
         assert(!moving());press();assert(commands==1);release_origin();advance(600);assert(commands==1);
         release();press();assert(ctl.ignored_presses==1&&ctl.state==MOVING_DOWN&&commands==1);
     }
-    CASE("stationary endpoint loss is latched") { fresh(1,0,true);edge(10,0);advance(100);assert(ctl.fault==UNEXPECTED_LIMIT&&commands==0); }
+    CASE("stationary endpoint loss is latched") { fresh(1,0,true);edge(10,1);advance(100);assert(ctl.fault==UNEXPECTED_LIMIT&&commands==0); }
     CASE("reversal interval interlock") {
         fresh(1,0,true);advance(500);
 #ifdef TEST_SUPERVISED
@@ -274,7 +283,7 @@ int main(void)
     CASE("NVS and AP failures inhibit start") {
         fresh(1,0,true);advance(500);ctl.nvs_ok=false;assert(!motor_start(false));ctl.nvs_ok=true;ctl.web_ok=false;assert(!motor_start(false));
     }
-    CASE("both active during movement stops") { begin_down();edge(1,1);advance(60);assert(ctl.fault==BOTH_LIMITS_ACTIVE&&!ctl.drive_commanded); }
+    CASE("both active during movement stops") { begin_down();edge(1,0);advance(60);assert(ctl.fault==BOTH_LIMITS_ACTIVE&&!ctl.drive_commanded); }
     CASE("restart in transit never resumes") { begin_down();release_origin();fresh(0,0,true);assert(ctl.state==FAULT&&commands==0); }
     CASE("late but within maximum arrival accepted after debounce") {
         begin_down();release_origin();at_elapsed(4970);arrive_bottom();assert(ctl.fault==NONE&&ctl.last_down_ms==4980);
@@ -287,8 +296,8 @@ int main(void)
         advance(10000-(simulated_ms-ctl.state_ms));
 #endif
         assert(ctl.state==MOVING_UP&&levels[3]==1&&levels[4]==0);
-        edge(1,0);advance(100);assert(ctl.origin_released);
-        at_elapsed(1200);edge(10,1);advance(10);assert(!ctl.drive_commanded&&levels[3]==0&&levels[4]==0);
+        edge(1,1);advance(100);assert(ctl.origin_released);
+        at_elapsed(1200);edge(10,0);advance(10);assert(!ctl.drive_commanded&&levels[3]==0&&levels[4]==0);
         advance(50);assert(ctl.fault==NONE&&ctl.last_up_ms==1210);
     }
     CASE("upward timeout and early upper endpoint") {
@@ -299,8 +308,8 @@ int main(void)
 #else
             advance(10000-(simulated_ms-ctl.state_ms));
 #endif
-            edge(1,0);advance(100);
-            if(early){at_elapsed(500);edge(10,1);advance(60);assert(ctl.fault==TRAVEL_TOO_FAST);}
+            edge(1,1);advance(100);
+            if(early){at_elapsed(500);edge(10,0);advance(60);assert(ctl.fault==TRAVEL_TOO_FAST);}
             else{at_elapsed(5010);assert(ctl.fault==TRAVEL_TIMEOUT);}
             assert(!levels[3]&&!levels[4]);
         }
@@ -312,16 +321,16 @@ int main(void)
         ctl.now_ms+=500;assert(!sample(&in,50)&&in.events==1);
     }
     CASE("pulse entirely between samples stops destination") {
-        begin_down();release_origin();at_elapsed(1200);edge(1,1);edge(1,0);
+        begin_down();release_origin();at_elapsed(1200);edge(1,0);edge(1,1);
         advance(10);assert(!ctl.drive_commanded&&ctl.destination_pending);
         advance(50);assert(ctl.fault==LIMIT_SENSOR_INCONSISTENT);
     }
     CASE("held button at boot cannot start or arm") {
-        fresh(1,0,true);ctl.button.initialized=false;edge(20,0);ctl.state=BOOT;ctl.initialized=false;
+        fresh(1,0,true);ctl.button.initialized=false;edge(20,1);ctl.state=BOOT;ctl.initialized=false;
         advance(5000);assert(!ctl.armed&&!moving()&&commands==0);release();
     }
     CASE("swapping stationary endpoints is inconsistent") {
-        fresh(1,0,true);edge(10,0);edge(1,1);advance(100);assert(ctl.fault==UNEXPECTED_LIMIT);
+        fresh(1,0,true);edge(10,1);edge(1,0);advance(100);assert(ctl.fault==UNEXPECTED_LIMIT);
     }
     CASE("top without calibration remains idle and cannot descend") {
         fresh(1,0,false);assert(ctl.state==IDLE_TOP);advance(500);press();assert(!moving()&&commands==0);
@@ -394,7 +403,7 @@ static int gpio_config(const gpio_config_t *c) {
  assert(!(c->pin_bit_mask & (1ULL<<21)));
  if(c->mode==GPIO_MODE_OUTPUT && (c->pin_bit_mask&((1ULL<<3)|(1ULL<<4)))) {
    assert(!levels[3]&&!levels[4]);assert(c->pull_down_en==1&&c->pull_up_en==0);
- }else if(c->mode==GPIO_MODE_INPUT){assert(c->pull_up_en==1&&c->intr_type==GPIO_INTR_ANYEDGE);}
+ }else if(c->mode==GPIO_MODE_INPUT){assert(c->pull_up_en==0&&c->pull_down_en==1&&c->intr_type==GPIO_INTR_ANYEDGE);}
  ++configured;return 0;
 }
 static int gpio_isr_handler_add(int pin,void (*handler)(void*),void *arg){
@@ -554,6 +563,8 @@ def validate(output, browser):
     assert source.count(".uri=") == 3 and source.count(".method=HTTP_GET") == 3 and "xTaskCreate" not in source
     assert '.uri="/dashboard"' in source and '.uri="/"' not in source
     assert "default 3" in kconfig and "default 4" in kconfig
+    assert "NC para 3V3" in kconfig and "NO para 3V3" in kconfig
+    assert ".pull_up_en = GPIO_PULLUP_DISABLE, .pull_down_en = GPIO_PULLDOWN_ENABLE" in source
     print("PASS minimal architecture and removal regression")
     control = output / "control.txt"
     control.write_text(CONTROL)
@@ -572,6 +583,8 @@ def validate(output, browser):
         "flash": ("#define CONFIG_ELEVATOR_BUTTON_GPIO 20", "#define CONFIG_ELEVATOR_BUTTON_GPIO 12"),
         "unsupported": ("#define CONFIG_ELEVATOR_BUTTON_GPIO 20", "#define CONFIG_ELEVATOR_BUTTON_GPIO 25"),
         "password": ('#define CONFIG_ELEVATOR_AP_PASSWORD "12345678"', '#define CONFIG_ELEVATOR_AP_PASSWORD "short"'),
+        "old-limit-polarity": ("#define CONFIG_ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL 0", "#define CONFIG_ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL 1"),
+        "old-button-polarity": ("#define CONFIG_ELEVATOR_BUTTON_ACTIVE_LEVEL 1", "#define CONFIG_ELEVATOR_BUTTON_ACTIVE_LEVEL 0"),
         "timing-order": ("#define CONFIG_ELEVATOR_MAX_UP_MS 5000", "#define CONFIG_ELEVATOR_MAX_UP_MS 1000"),
         "release-deadline": ("#define CONFIG_ELEVATOR_START_RELEASE_MS 1500", "#define CONFIG_ELEVATOR_START_RELEASE_MS 6000"),
         "uart-default": ("#define ELEVATOR_HOST_TEST", "#define ELEVATOR_HOST_TEST\n#define CONFIG_ESP_CONSOLE_UART 1\n#define CONFIG_ESP_CONSOLE_UART_DEFAULT 1"),
