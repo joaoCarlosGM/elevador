@@ -626,7 +626,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         elapsed, up, down, last_up, last_down, CONFIG_ELEVATOR_MIN_UP_MS, CONFIG_ELEVATOR_MIN_DOWN_MS,
         CONFIG_ELEVATOR_MAX_UP_MS, CONFIG_ELEVATOR_MAX_DOWN_MS);
     json_add(&j, "\"ignored_presses\":%"PRIu32",\"motor_blocked\":%s,\"refresh_ms\":%d,\"uptime_ms\":%"PRIu64"}",
-        s.ignored_presses, json_bool(s.fault != NONE || !s.initialized || (!s.calibration_valid && !s.armed) ||
+        s.ignored_presses, json_bool(s.fault != NONE || !s.initialized || (!s.calibration_valid && !s.armed && !WEB_MODE) ||
         !LIMITS_CONFIRMED || (!AUTOMATIC && !SUPERVISED && !WEB_MODE) || s.calibration_dirty), CONFIG_ELEVATOR_WEB_REFRESH_MS, now);
     no_cache(req); httpd_resp_set_type(req, "application/json");
     if (j.failed) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status excedeu buffer");
