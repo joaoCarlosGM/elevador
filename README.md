@@ -10,9 +10,9 @@ Os pinos funcionais são editáveis no **`idf.py menuconfig` → `Elevador — C
 
 | GPIO ESP32-C3 | Nome funcional | Ligação externa | Comportamento |
 |---|---|---|---|
-| GPIO1 | `LIMIT_BOTTOM` | Fim de curso inferior, NC → GND | HIGH = acionado/contato aberto |
-| GPIO10 | `LIMIT_TOP` | Fim de curso superior, NC → GND | HIGH = acionado/contato aberto |
-| GPIO20 | `BUTTON` | Botão momentâneo NO → GND | LOW = pressionado |
+| GPIO1 | `LIMIT_BOTTOM` | Fim inferior NC → **3V3** | LOW = acionado / contato aberto |
+| GPIO10 | `LIMIT_TOP` | Fim superior NC → **3V3** | LOW = acionado / contato aberto |
+| GPIO20 | `BUTTON` | Botão físico NO → **3V3** | HIGH = pressionado |
 | GPIO3 | `MOTOR_IN1` | Entrada 1A do L293D (pino 2) | Sinal direcional |
 | GPIO4 | `MOTOR_IN2` | Entrada 2A do L293D (pino 7) | Sinal direcional |
 | GPIO8 | `STATUS_LED` | LED integrado **se confirmado** | Usualmente ativo LOW no C3 SuperMini; desabilitado por padrão |
@@ -51,10 +51,14 @@ O L293D possui **duas alimentações distintas**: VCC1 (lógica) e VCC2 (motor),
 
 ## 3. Sensores e botão
 
-- **Fim superior:** contato normalmente fechado (NC) do microinterruptor entre **GPIO10** e **GND**; usar pull-up a 3,3 V (habilitado pelo firmware). Contato aberto/acionado é interpretado como HIGH.
-- **Fim inferior:** mesmo circuito, no **GPIO1**.
-- **Botão local:** contato normalmente aberto (NO) entre **GPIO20** e **GND**; LOW indica pressão.
-- Interrupções em ambas as bordas e debounce são tratados pelo firmware. Fio NC partido pode ser lido como sensor acionado: isso **não** substitui um circuito de segurança independente.
+- **Fim superior (GPIO10)**: microinterruptor NC para **3V3**. Fechado = HIGH (livre), aberto = LOW (ativo).
+- **Fim inferior (GPIO1)**: microinterruptor NC para **3V3**. Fechado = HIGH (livre), aberto = LOW (ativo).
+- **Botão físico (GPIO20)**: contato NO para **3V3**. Solto = LOW, pressionado = HIGH.
+- As três entradas usam **pull-down interno** (pull-up desativado), debounce e IRQ em ambas as bordas. Nenhuma entrada pode receber 5 V ou 12 V.
+- **Troca de circuito obrigatória**: o antigo fio GND dos três contatos deve passar para **3V3** (somente com o sistema desligado e o motor sem alimentação). O firmware isoladamente não altera o nível elétrico de um interruptor conectado à massa.
+- Contato NC aberto por rompimento de cabo continua sinalizando fim ativo e pode produzir `BOTH_LIMITS_ACTIVE` se ambos estiverem abertos. Isso não substitui proteção física independente.
+- No `idf.py menuconfig`, configure `LIMIT_TOP_ACTIVE_LEVEL=0`, `LIMIT_BOTTOM_ACTIVE_LEVEL=0`, `BUTTON_ACTIVE_LEVEL=1`. O `sdkconfig` local pode reter valores antigos: se os valores forem incompatíveis, o novo firmware trava em `GPIO_CONFIGURATION`.
+- Há **um único botão físico GPIO20**, não dois botões separados para subida/descida. A direção é decidida pela máquina de estados; controles da página web não são entradas elétricas.
 
 ## 4. Wi-Fi e painel
 
