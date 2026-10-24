@@ -9,8 +9,8 @@ Você é o agente de desenvolvimento deste repositório. Implemente um firmware 
 ### Restrições de arquitetura
 
 1. Toda a **lógica de aplicação** deve residir em `main/main.c`, em **C**, e não em C++.
-2. Todo HTML, CSS e JavaScript da interface deve residir em **um único** `main/index.html`, abrível diretamente no navegador em modo de demonstração.
-3. Não crie outros arquivos `.c`, `.cpp`, `.h`, `.js`, `.css` nem bibliotecas externas da aplicação.
+2. Usar somente dois arquivos de interface sem dependências: `main/control.html` para o painel inicial `GET /` e `main/index.html` para diagnóstico em `GET /dashboard`, ambos abríveis em demonstração local. CSS e JavaScript embutidos em cada HTML.
+3. Não crie outros arquivos `.c`, `.cpp`, `.h`, `.js`, `.css` nem bibliotecas externas da aplicação. `main/control.html` é uma exceção explícita introduzida para a página inicial.
 4. Preserve somente os arquivos auxiliares obrigatórios do ESP-IDF: `CMakeLists.txt` da raiz, `main/CMakeLists.txt`, `main/Kconfig.projbuild` e `AGENTS.md`; `sdkconfig`, `sdkconfig.defaults`, `.gitignore` e saídas de build podem existir conforme as convenções do ESP-IDF. **É impossível oferecer configurações Kconfig sem um arquivo Kconfig e compilar sem CMakeLists; esses arquivos são exceções necessárias à restrição de arquivo único.**
    Para testes reproduzíveis do PR, permite-se também tests/validate.py: runner sem lógica de aplicação, que gera mocks e executáveis fora do checkout. Não adicionar outras fontes da aplicação.
 5. Use apenas bibliotecas nativas do ESP-IDF (GPIO, Wi-Fi, NVS, esp_timer, esp_http_server, logs, etc.), sem Arduino e sem bibliotecas de terceiros.
@@ -425,3 +425,16 @@ em HIGH após parada recusada. Validação local de software, não CI aprovado;
 evidências da nova rodada são publicadas no PR. Nenhum teste físico realizado.
 Uma partida parcial pode produzir energização antes do rollback; sem GPIO de
 ENABLE, o firmware não oferece corte independente se a escrita de parada falhar.
+
+
+### Atualização de interface — rota raiz de controle
+
+A versão atual preserva **GET /dashboard** somente como página de diagnóstico e adiciona
+**GET /** como interface distinta com controles de SUBIR, DESCER e PARAR.
+As duas páginas são embutidas na flash via `EMBED_TXTFILES` em `main/CMakeLists.txt`.
+**Não há POST, WebSocket nem endpoint HTTP de movimentação:** os botões em `/`
+funcionam apenas na demonstração local `file://`; na interface servida pelo ESP32
+permanecem desabilitados. Isso não representa validação de comando remoto físico.
+Com o erro `BOTH_LIMITS_ACTIVE` registrado em bancada e sem corte independente da ponte,
+não habilitar acionamento físico pela web nem suprimir intertravamentos.
+Testar ambas as rotas, o HTML embutido e o comportamento desabilitado no modo real.

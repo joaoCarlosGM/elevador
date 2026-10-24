@@ -441,9 +441,13 @@ int main(void) {
  puts("PASS GPIO failure status/health reports unknown command, not confirmed braking");
  memset(&r,0,sizeof(r));assert(index_handler(&r)==0);assert(!strcmp(r.type,"text/html; charset=utf-8")&&r.no_cache&&r.csp);
  assert(strlen(r.body)==(size_t)(index_html_end-index_html_start-1));assert(strstr(r.body,"IN1=IN2=0"));
+ memset(&r,0,sizeof(r));assert(root_control_handler(&r)==0);assert(!strcmp(r.type,"text/html; charset=utf-8")&&r.no_cache&&r.csp);
+ assert(strlen(r.body)==(size_t)(control_html_end-control_html_start-1));
+ assert(strstr(r.body,"id=\"up\"")&&strstr(r.body,"id=\"down\"")&&strstr(r.body,"id=\"stop\""));
+ assert(strstr(r.body,"isDemo=location.protocol==='file:'"));
  json_t j={0};char big[4000];memset(big,'x',sizeof(big)-1);big[sizeof(big)-1]=0;json_add(&j,"%s",big);assert(j.failed);
  json_add(&j,"ignored");assert(j.failed);
- puts("PASS GET /, /api/status, /api/health 200/503, no-store, CSP, bounded JSON");
+ puts("PASS GET /, /dashboard, /api/status, /api/health 200/503, no-store, CSP, bounded JSON");
  return 0;
 }
 '''
@@ -521,6 +525,37 @@ const assert=require('assert');
    assert(!(await live.locator('#gpio-'+key).evaluate(e=>e.classList.contains('active'))));
  }
  console.log('PASS GPIO failure UI: no confirmed movement/braking, unknown outputs, no active glow');
+
+ // Distinct root control page: buttons must stay disabled when live.
+ fixture.state='FAULT';
+ fixture.error={code:'BOTH_LIMITS_ACTIVE',message:'Ambos os fins ativos',state:'BOOT',time_ms:368};
+ const ctrl=await browser.newPage({viewport:{width:360,height:800}});
+ ctrl.on('pageerror',e=>errors.push(e.message));
+ const controlHtml=fs.readFileSync(process.env.ELEVATOR_CONTROL_HTML,'utf8');
+ await ctrl.route('http://control.test/**',route=>{
+  if(route.request().url().endsWith('/api/status'))
+   return route.fulfill({contentType:'application/json',body:JSON.stringify(fixture)});
+  return route.fulfill({contentType:'text/html',body:controlHtml});
+ });
+ await ctrl.goto('http://control.test/');
+ await ctrl.waitForFunction(()=>document.querySelector('#connection').textContent==='API CONECTADA');
+ for(const id of ['up','down','stop'])assert(await ctrl.locator('#'+id).isDisabled());
+ assert.equal(await ctrl.locator('a[href="/dashboard"]').count(),1);
+ assert(await ctrl.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await ctrl.close();
+ // In the browser test only, force local-demo detection; verify no network motor commands.
+ const local=await browser.newPage({viewport:{width:320,height:800}});
+ local.on('pageerror',e=>errors.push(e.message));
+ await local.route('http://local.test/**',route=>route.fulfill({contentType:'text/html',body:controlHtml.replace("const isDemo=location.protocol==='file:';","const isDemo=true;")}));
+ await local.goto('http://local.test/');
+ await local.waitForFunction(()=>document.querySelector('#connection').textContent==='DEMONSTRAÇÃO');
+ for(const id of ['up','down','stop'])assert(await local.locator('#'+id).isEnabled());
+ await local.locator('#up').click();await local.waitForFunction(()=>document.querySelector('#status').textContent==='SUBINDO');
+ await local.locator('#stop').click();
+ assert.equal(await local.locator('#status').textContent(),'NA BASE');
+ assert.equal(errors.length,0);
+ await local.close();
+ console.log('PASS root-only controls, disabled on device, simulated in local demo, 320/360px responsive');
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});
 '''
@@ -550,9 +585,14 @@ def validate(output, browser):
     if re.search(removed, source + html + kconfig):
         raise AssertionError("Removed motor pad still exists")
     assert sorted(p.name for p in (ROOT / "main").glob("*.c")) == ["main.c"]
-    assert 'EMBED_TXTFILES "index.html"' in (ROOT / "main/CMakeLists.txt").read_text()
-    assert source.count(".uri=") == 3 and source.count(".method=HTTP_GET") == 3 and "xTaskCreate" not in source
-    assert '.uri="/dashboard"' in source and '.uri="/"' not in source
+    assert 'EMBED_TXTFILES "index.html" "control.html"' in (ROOT / "main/CMakeLists.txt").read_text()
+    assert source.count(".uri=") == 4 and source.count(".method=HTTP_GET") == 4 and "xTaskCreate" not in source
+    assert '.uri="/dashboard"' in source and '.uri="/"' in source
+    assert '.method=HTTP_POST' not in source
+    root_page=(ROOT / "main/control.html").read_text()
+    assert all('id="' + x + '"' in root_page for x in ('up','down','stop'))
+    assert "if(!isDemo)return;" in root_page
+    assert "for(const id of ['up','down','stop'])$(id).disabled=true;" in root_page
     assert "default 3" in kconfig and "default 4" in kconfig
     print("PASS minimal architecture and removal regression")
     control = output / "control.txt"
@@ -590,10 +630,13 @@ def validate(output, browser):
     integration = output / "integration.txt"
     integration.write_text(PLATFORM_STUB + init + platform + PLATFORM_TESTS)
     assembly = output / "embedded.s"
-    # Test the real root handler with the same symbol layout as ESP-IDF's text embedding.
+    # Test both HTML handlers with symbols identical to ESP-IDF text embedding.
     assembly.write_text('.section .rodata\n.global _binary_index_html_start\n.global _binary_index_html_end\n'
                         '_binary_index_html_start:\n.incbin "' + str(ROOT / "main/index.html") +
-                        '"\n.byte 0\n_binary_index_html_end:\n.section .note.GNU-stack,"",@progbits\n')
+                        '"\n.byte 0\n_binary_index_html_end:\n'
+                        '.global _binary_control_html_start\n.global _binary_control_html_end\n'
+                        '_binary_control_html_start:\n.incbin "' + str(ROOT / "main/control.html") +
+                        '"\n.byte 0\n_binary_control_html_end:\n.section .note.GNU-stack,"",@progbits\n')
     target = output / "integration"
     compile_c(integration, target, output, assembly=assembly)
     run([str(target)], output, "gpio-nvs-http")
@@ -615,7 +658,7 @@ def validate(output, browser):
     if browser:
         test = output / "browser.cjs"
         test.write_text(BROWSER)
-        env = dict(os.environ, ELEVATOR_HTML=str(ROOT / "main/index.html"))
+        env = dict(os.environ, ELEVATOR_HTML=str(ROOT / "main/index.html"), ELEVATOR_CONTROL_HTML=str(ROOT / "main/control.html"))
         run(["node", str(test)], output, "browser", env)
     else:
         print("NOT RUN browser checks (use --browser)")

@@ -2,7 +2,7 @@
 
 Firmware experimental para um **elevador de bancada**, com motor DC, dois fins de curso, botão local, LED onboard e painel de telemetria Wi-Fi. Não usar para transportar pessoas/animais nem operar carga suspensa sem retenção mecânica independente.
 
-> **Estado do painel:** o dashboard é servido somente em **`http://192.168.4.1/dashboard`**. A página possui comandos de subida/descida/parada **apenas em modo de demonstração (arquivo HTML aberto localmente)**. Não existe endpoint de movimento remoto e esses botões ficam desabilitados quando conectado ao ESP32. O movimento real permanece controlado pelo botão físico e pelo firmware de segurança.
+> **Endereços:** `http://192.168.4.1/` abre o **painel de controle** com botões SUBIR, DESCER e PARAR. `http://192.168.4.1/dashboard` continua sendo o **dashboard de diagnóstico**. Os botões **não acionam o motor real**: ficam desabilitados quando a página roda no ESP32 e são interativos apenas na demonstração offline do arquivo `main/control.html`. Não existe endpoint HTTP de movimento; o botão físico continua responsável pela atuação.
 
 ## 1. Pinagem padrão (ESP32-C3 Mini)
 
@@ -60,12 +60,13 @@ O L293D possui **duas alimentações distintas**: VCC1 (lógica) e VCC2 (motor),
 
 1. Após gravar firmware, conectar o celular ou computador à rede SoftAP **`Elevador`**.
 2. Senha padrão de desenvolvimento: **`12345678`** (trocar em `menuconfig` para uso fora de bancada).
-3. Abrir **`http://192.168.4.1/dashboard`**. A raiz `/` **não disponibiliza a página** (HTTP 404).
-4. `GET /api/status` e `GET /api/health` permanecem disponíveis porque alimentam a telemetria; não são páginas HTML.
+3. Abrir **`http://192.168.4.1/`** para ver os controles e o estado do elevador.
+4. Abrir **`http://192.168.4.1/dashboard`** para diagnóstico detalhado de GPIOs.
+5. `GET /api/status` e `GET /api/health` permanecem disponíveis como APIs de leitura; não são páginas HTML.
 
 O dashboard mostra fins de curso, botão, IN1/IN2, LED, temporizações, calibração, falhas e animação de posição **estimada**, não medição com encoder.
 
-O arquivo `main/index.html` pode ser aberto isoladamente no navegador, em modo demo explícito, para experimentar os botões simulados sem controlar a ponte.
+Os arquivos `main/control.html` e `main/index.html` podem ser abertos localmente no navegador, em demonstração explícita. Nenhum botão remoto é habilitado quando servidos pelo ESP32.
 
 ## 5. Compilar (ESP-IDF 5.3.1)
 
@@ -92,12 +93,13 @@ elevador/
 │   ├── CMakeLists.txt
 │   ├── Kconfig.projbuild
 │   ├── main.c
-│   └── index.html
+│   ├── index.html
+│   └── control.html
 └── tests/
     └── validate.py
 ```
 
-A lógica do dispositivo reside exclusivamente em `main/main.c`; o HTML, CSS e JS estão juntos em `main/index.html`, embutidos via `EMBED_TXTFILES`. A pasta `build/` e o `sdkconfig` local são ignorados pelo Git.
+A lógica do dispositivo reside exclusivamente em `main/main.c`; as duas páginas HTML/CSS/JS independentes são `main/index.html` (diagnóstico) e `main/control.html` (controles), ambas embutidas via `EMBED_TXTFILES`. A pasta `build/` e o `sdkconfig` local são ignorados pelo Git.
 
 ## 7. Limitações e validação
 
