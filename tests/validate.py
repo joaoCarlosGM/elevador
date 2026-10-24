@@ -217,6 +217,12 @@ int main(void)
     }
     printf("%d cases passed\n",cases);return 0;
 #endif
+    CASE("web STOP interrupts motion from a physical button") {
+        begin_down();assert(ctl.drive_commanded);
+        ctl.remote_stop_requested=true;advance(10);
+        assert(ctl.fault==REMOTE_STOP&&ctl.state==FAULT&&!ctl.drive_commanded);
+        assert(!levels[3]&&!levels[4]);
+    }
     CASE("failed output preserves last accepted value and counters") {
         fresh(1,0,true);uint32_t count=ctl.output_events[0];uint64_t changed=ctl.output_change_ms[0];
         fail_pin=3;fail_level=1;fail_remaining=-1;
