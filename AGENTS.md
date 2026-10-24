@@ -24,12 +24,12 @@ Placa declarada: **ESP32-C3 Mini**. No formato *SuperMini* usual há LED azul em
 
 | Nome funcional | Símbolo Kconfig desejado | GPIO padrão | Tipo | Ligação |
 |---|---|---:|---|---|
-| Sensor fim de curso inferior | `CONFIG_ELEVATOR_LIMIT_BOTTOM_GPIO` | 1 | Entrada IRQ | Microinterruptor NC para GND, pull-up 3,3 V |
+| Sensor fim de curso inferior | `CONFIG_ELEVATOR_LIMIT_BOTTOM_GPIO` | 1 | Entrada IRQ | Microinterruptor NC para 3V3, pull-down interno |
 | Sentido do motor A | `CONFIG_ELEVATOR_MOTOR_IN1_GPIO` | 3 | Saída | L293D pino 2 (1A) |
 | Sentido do motor B | `CONFIG_ELEVATOR_MOTOR_IN2_GPIO` | 4 | Saída | L293D pino 7 (2A) |
 | LED de status onboard | `CONFIG_ELEVATOR_STATUS_LED_GPIO` | 8 | Saída | LED integrado, **se confirmado** |
-| Sensor fim de curso superior | `CONFIG_ELEVATOR_LIMIT_TOP_GPIO` | 10 | Entrada IRQ | Microinterruptor NC para GND, pull-up 3,3 V |
-| Botão único | `CONFIG_ELEVATOR_BUTTON_GPIO` | 20 | Entrada IRQ | Botão NO para GND, pull-up 3,3 V |
+| Sensor fim de curso superior | `CONFIG_ELEVATOR_LIMIT_TOP_GPIO` | 10 | Entrada IRQ | Microinterruptor NC para 3V3, pull-down interno |
+| Botão único | `CONFIG_ELEVATOR_BUTTON_GPIO` | 20 | Entrada IRQ | Botão NO para 3V3, pull-down interno |
 | Reservado | — | 2 | — | GPIO de *strapping*; não usar por padrão |
 
 O ESP32-C3 usa GPIO20/GPIO21 por padrão para **UART0 RX/TX**. Nesta proposta, GPIO20 é botão e GPIO21 não é utilizado pela aplicação; programar/depurar pela **USB Serial/JTAG nativa nos GPIO18/GPIO19**, se disponível. Não usar UART0 nesses pinos enquanto conflitar com o botão; validar também qualquer remapeamento de IN1/IN2. Evite GPIO2, GPIO8 e GPIO9 para novos botões/sensores por serem pinos de strapping; GPIO8 apenas LED onboard confirmado. Não usar 18/19 para outra função.
@@ -44,7 +44,7 @@ O ESP32-C3 usa GPIO20/GPIO21 por padrão para **UART0 RX/TX**. Nesta proposta, G
 Criar em `main/Kconfig.projbuild` um menu `Elevador — Configuração do Hardware`. Todos os nomes de GPIO, lógica ativa e parâmetros relevantes precisam ser visíveis e editáveis. Organizar em seções descritivas:
 
 - **Pinos**: os cinco GPIOs de entradas/motor e o LED onboard; habilitar/desabilitar LED, e permitir LED ativo em nível LOW/HIGH.
-- **Entradas**: sensores NC por padrão; estados lógicos ativos parametrizáveis; botão ativo LOW por padrão.
+- **Entradas**: sensores NC por padrão; estados lógicos ativos parametrizáveis; botão ativo HIGH por padrão.
 - **Antirruído**: debounce de fins de curso (ex.: default 35 ms) e botão (ex.: default 50 ms), tempo de amostragem (ex.: 10 ms).
 - **Temporizações**: espera inferior antes de subir (default **10000 ms**), tempos mínimos permitidos independentes por sentido, tempos máximos independentes por sentido, intervalo mínimo entre inversões do motor.
 - **Conectividade**: SSID `Elevador`, senha `12345678` (mínimo 8 caracteres WPA2), número máximo de clientes, intervalo de atualização web.
@@ -62,8 +62,8 @@ Documentar como mudar todos os pinos sem editar `main.c`.
 - `esp_timer` periódico pode coordenar reamostragem, máquina de estados e LED desde que o callback seja extremamente curto e não execute acesso HTTP/NVS nem bloqueie; quando necessário, deferir operações lentas aos contextos apropriados sem criar tarefas próprias.
 - Priorizar comando IN1=IN2=0 (frenagem elétrica) ao receber **sinal de limite potencialmente acionado**, sem aguardar a janela de debounce para continuar forçando um limite. Depois, validar o estado estável.
 - Manter `raw_level`, `debounced_active`, `last_change_ms`, `edge_count` e contadores de eventos para cada entrada; exibir níveis brutos e filtrados na API.
-- Button de contato normalmente aberto (NO), ligado ao GND: apenas transição debounced para *pressionado* gera comando. Pressionado continuamente não dispara comandos repetidos.
-- Fins de curso NC para GND com pull-up: circuito fechado = leitura LOW, circuito aberto (pressionado ou cabo rompido) = leitura HIGH. **Um fio rompido pode parecer um fim de curso acionado; detecção absoluta de falhas requer redundância/hardware adicional.** Não alegar cobertura de falhas que o hardware não detecta.
+- Button de contato normalmente aberto (NO), ligado a 3V3: apenas transição debounced para *pressionado* gera comando. Pressionado continuamente não dispara comandos repetidos.
+- Fins de curso NC para 3V3 com pull-down: circuito fechado = leitura HIGH, circuito aberto (pressionado ou cabo rompido) = leitura LOW. **Um fio rompido pode parecer um fim de curso acionado; detecção absoluta de falhas requer redundância/hardware adicional.** Não alegar cobertura de falhas que o hardware não detecta.
 
 ## 4. Driver do motor — somente IN1 e IN2
 
@@ -425,3 +425,15 @@ em HIGH após parada recusada. Validação local de software, não CI aprovado;
 evidências da nova rodada são publicadas no PR. Nenhum teste físico realizado.
 Uma partida parcial pode produzir energização antes do rollback; sem GPIO de
 ENABLE, o firmware não oferece corte independente se a escrita de parada falhar.
+
+
+### Revisão do circuito de entradas (pull-down)
+
+As três entradas GPIO1 (fim inferior NC), GPIO10 (fim superior NC) e GPIO20
+(botão físico NO) usam `GPIO_PULLDOWN_ENABLE` e pull-up desligado.
+Os três contatos devem ligar seus GPIOs a **3V3**, nunca a GND nem a 5V:
+NC fechado HIGH/inativo; NC aberto LOW/ativo; NO solto LOW/inativo;
+NO pressionado HIGH/ativo. O Kconfig exige active levels 0/0/1 e rejeita
+`sdkconfig` antigo, deixando o motor bloqueado. Não liberar os comandos de motor
+ou ignorar `BOTH_LIMITS_ACTIVE`. Fazer auditoria do nível lógico de GPIO3/4
+com a alimentação de potência do motor desconectada antes de comissionamento.
