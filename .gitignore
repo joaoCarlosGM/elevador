@@ -1,0 +1,39 @@
+# =====================================
+# ESP-IDF - Elevador ESP32-C3
+# =====================================
+
+# Arquivos de compilação
+build/
+**/build/
+
+# Configurações locais geradas pelo ESP-IDF
+sdkconfig
+sdkconfig.old
+**/sdkconfig
+**/sdkconfig.old
+
+# Componentes baixados automaticamente
+managed_components/
+**/managed_components/
+
+# Arquivos temporários
+*.tmp
+*.log
+*.bak
+*.swp
+*~
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
