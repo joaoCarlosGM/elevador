@@ -614,7 +614,7 @@ static esp_err_t start_web(void)
     httpd_handle_t server = NULL;
     TRY(httpd_start(&server, &cfg));
     const httpd_uri_t routes[] = {
-        {.uri="/", .method=HTTP_GET, .handler=index_handler},
+        {.uri="/dashboard", .method=HTTP_GET, .handler=index_handler},
         {.uri="/api/status", .method=HTTP_GET, .handler=status_handler},
         {.uri="/api/health", .method=HTTP_GET, .handler=health_handler}
     };
