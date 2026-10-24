@@ -527,6 +527,8 @@ const assert=require('assert');
  console.log('PASS GPIO failure UI: no confirmed movement/braking, unknown outputs, no active glow');
 
  // Distinct root control page: buttons must stay disabled when live.
+ fixture.state='FAULT';
+ fixture.error={code:'BOTH_LIMITS_ACTIVE',message:'Ambos os fins ativos',state:'BOOT',time_ms:368};
  const ctrl=await browser.newPage({viewport:{width:360,height:800}});
  ctrl.on('pageerror',e=>errors.push(e.message));
  const controlHtml=fs.readFileSync(process.env.ELEVATOR_CONTROL_HTML,'utf8');
