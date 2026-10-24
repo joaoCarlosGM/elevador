@@ -644,11 +644,74 @@ static esp_err_t health_handler(httpd_req_t *req)
 static void wifi_event(void *arg, esp_event_base_t base, int32_t event, void *data)
 {
     (void)arg; (void)base; (void)data;
-    if (event == WIFI_EVENT_AP_STOP) {
+    if (event == WIFI_EVENT_AP_STOP || event == WIFI_EVENT_AP_STADISCONNECTED) {
         portENTER_CRITICAL(&control_mux);
-        ctl.web_ok = false; ctl.now_ms = clock_ms(); fail(AP_OR_HTTP_FAILURE);
+        ctl.remote_requested = 0; ctl.remote_stop_requested = true;
+        if (event == WIFI_EVENT_AP_STOP) {
+            ctl.web_ok = false; ctl.now_ms = clock_ms(); fail(AP_OR_HTTP_FAILURE);
+        }
         portEXIT_CRITICAL(&control_mux);
     }
+}
+/* POST endpoints only enqueue requests. The control timer alone owns outputs.
+ * Origin check blocks drive-by cross-site requests on an AP without internet. */
+static bool valid_control_origin(httpd_req_t *req)
+{
+    char value[64];
+    size_t len = httpd_req_get_hdr_value_len(req, "Origin");
+    if (!len || len >= sizeof(value)) return false;
+    if (httpd_req_get_hdr_value_str(req, "Origin", value, sizeof(value)) != ESP_OK) return false;
+    return strcmp(value, "http://192.168.4.1") == 0;
+}
+static esp_err_t control_reply(httpd_req_t *req, const char *status, const char *json)
+{
+    no_cache(req); httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, status);
+    return httpd_resp_sendstr(req, json);
+}
+static bool remote_start_allowed(bool up)
+{
+    const input_t *origin = up ? &ctl.bottom : &ctl.top;
+    const input_t *dest = up ? &ctl.top : &ctl.bottom;
+    return WEB_MODE && operational() && ctl.initialized && ctl.pins_ready &&
+        ctl.fault == NONE && ctl.nvs_ok && ctl.web_ok && !ctl.gpio_write_failed &&
+        !ctl.calibration_dirty && !ctl.remote_stop_requested &&
+        !ctl.button.debounced_active && !moving() && !ctl.drive_commanded &&
+        ctl.now_ms >= ctl.remote_block_until_ms &&
+        origin->initialized && origin->debounced_active && raw_active(origin) &&
+        dest->initialized && !dest->debounced_active && !raw_active(dest);
+}
+static esp_err_t remote_control_handler(httpd_req_t *req)
+{
+    if (!valid_control_origin(req))
+        return control_reply(req, "403 Forbidden", "{\"accepted\":false,\"reason\":\"origin\"}");
+    if (req->content_len != 0)
+        return control_reply(req, "400 Bad Request", "{\"accepted\":false,\"reason\":\"body\"}");
+    bool stop = strcmp(req->uri, "/api/control/stop") == 0;
+    bool up = strcmp(req->uri, "/api/control/up") == 0;
+    bool down = strcmp(req->uri, "/api/control/down") == 0;
+    if (!up && !down && !stop)
+        return control_reply(req, "404 Not Found", "{\"accepted\":false,\"reason\":\"path\"}");
+    bool accepted = false;
+    portENTER_CRITICAL(&control_mux);
+    if (stop) {
+        ctl.remote_stop_requested = true;
+        ctl.remote_requested = 0;
+        accepted = true;
+    } else if (WEB_MODE && ctl.remote_owned && moving() &&
+               ctl.fault == NONE && !ctl.remote_stop_requested &&
+               ((up && ctl.state == MOVING_UP) || (down && ctl.state == MOVING_DOWN))) {
+        ctl.remote_heartbeat_ms = clock_ms();
+        accepted = true;
+    } else if (remote_start_allowed(up)) {
+        ctl.remote_requested = up ? 1 : 2;
+        ctl.remote_heartbeat_ms = clock_ms();
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&control_mux);
+    return accepted ?
+        control_reply(req, "202 Accepted", "{\"accepted\":true}") :
+        control_reply(req, "409 Conflict", "{\"accepted\":false,\"reason\":\"interlock\"}");
 }
 static esp_err_t start_web(void)
 {
@@ -659,6 +722,7 @@ static esp_err_t start_web(void)
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     TRY(esp_wifi_init(&init)); TRY(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STOP, wifi_event, NULL));
+    TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, wifi_event, NULL));
     wifi_config_t wifi = { .ap = { .authmode = WIFI_AUTH_WPA2_PSK,
         .max_connection = CONFIG_ELEVATOR_AP_MAX_CLIENTS, .channel = 1,
         .pmf_cfg = { .required = false } } };
@@ -676,7 +740,10 @@ static esp_err_t start_web(void)
         {.uri="/", .method=HTTP_GET, .handler=root_control_handler},
         {.uri="/dashboard", .method=HTTP_GET, .handler=index_handler},
         {.uri="/api/status", .method=HTTP_GET, .handler=status_handler},
-        {.uri="/api/health", .method=HTTP_GET, .handler=health_handler}
+        {.uri="/api/health", .method=HTTP_GET, .handler=health_handler},
+        {.uri="/api/control/up", .method=HTTP_POST, .handler=remote_control_handler},
+        {.uri="/api/control/down", .method=HTTP_POST, .handler=remote_control_handler},
+        {.uri="/api/control/stop", .method=HTTP_POST, .handler=remote_control_handler}
     };
     for (unsigned i = 0; i < sizeof(routes)/sizeof(routes[0]); ++i) {
         err = httpd_register_uri_handler(server, &routes[i]);
