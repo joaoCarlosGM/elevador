@@ -1,0 +1,32 @@
+name: ESP32-C3 input pulldown regression
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+jobs:
+  mock-gpio-tests:
+    name: Pulldown and motor interlock host tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Host mocked GPIO NVS HTTP regression
+        run: python3 tests/validate.py
+  esp-idf-build:
+    name: ESP-IDF 5.3.1 firmware build (esp32c3)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: ESP-IDF native build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32c3
+          path: .
