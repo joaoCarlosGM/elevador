@@ -586,9 +586,10 @@ def validate(output, browser):
         raise AssertionError("Removed motor pad still exists")
     assert sorted(p.name for p in (ROOT / "main").glob("*.c")) == ["main.c"]
     assert 'EMBED_TXTFILES "index.html" "control.html"' in (ROOT / "main/CMakeLists.txt").read_text()
-    assert source.count(".uri=") == 4 and source.count(".method=HTTP_GET") == 4 and "xTaskCreate" not in source
+    assert source.count(".uri=") == 5 and source.count(".method=HTTP_GET") == 4 and "xTaskCreate" not in source
     assert '.uri="/dashboard"' in source and '.uri="/"' in source
-    assert '.method=HTTP_POST' not in source
+    assert source.count(".method=HTTP_POST") == 1 and '.uri="/api/control/stop"' in source
+    assert '.uri="/api/control/up"' not in source and '.uri="/api/control/down"' not in source
     root_page=(ROOT / "main/control.html").read_text()
     assert all('id="' + x + '"' in root_page for x in ('up','down','stop'))
     assert "if(!isDemo)return;" in root_page
