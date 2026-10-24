@@ -220,6 +220,11 @@ static bool pin_configuration_valid(void)
 static bool configuration_valid(void)
 {
     if (!pin_configuration_valid()) return false;
+    /* All input circuits now use pull-down. Reject stale sdkconfig polarity
+     * values rather than interpreting NC/NO switches backwards. */
+    if (CONFIG_ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL != 0 ||
+        CONFIG_ELEVATOR_LIMIT_BOTTOM_ACTIVE_LEVEL != 0 ||
+        CONFIG_ELEVATOR_BUTTON_ACTIVE_LEVEL != 1) return false;
     size_t pass = strlen(CONFIG_ELEVATOR_AP_PASSWORD), ssid = strlen(CONFIG_ELEVATOR_AP_SSID);
     return ssid > 0 && ssid <= 32 && pass >= 8 && pass <= 63 &&
         min_time(true) > 0 && min_time(false) > 0 &&
@@ -434,7 +439,7 @@ static bool initialize_gpio(void)
     if (gpio_install_isr_service(0) != ESP_OK) return false;
     for (unsigned i = 0; i < 3; ++i) {
         gpio_config_t cfg = {.pin_bit_mask = 1ULL << inputs[i]->pin, .mode = GPIO_MODE_INPUT,
-            .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .pull_up_en = GPIO_PULLUP_DISABLE, .pull_down_en = GPIO_PULLDOWN_ENABLE,
             .intr_type = GPIO_INTR_ANYEDGE};
         if (gpio_config(&cfg) != ESP_OK || gpio_isr_handler_add(inputs[i]->pin, input_isr, inputs[i]) != ESP_OK) return false;
         inputs[i]->raw_level = gpio_get_level(inputs[i]->pin);
