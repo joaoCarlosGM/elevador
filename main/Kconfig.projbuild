@@ -110,6 +110,17 @@ config ELEVATOR_SUPERVISED_TEST
 config ELEVATOR_AUTOMATIC_ENABLED
     bool "Habilitar automatico apos calibracao NVS validada"
     default n
+config ELEVATOR_WEB_CONTROL_ENABLED
+    bool "Permitir comando web manual da maquete (requer protecao mecanica e chave de corte independente)"
+    default n
+    help
+      Habilite apenas depois de verificar fisicamente os dois fins de curso,
+      a parada eletrica dos sinais IN1/IN2 e a parada de potencia independente.
+      Sem esta confirmacao, mantenha o modo desabilitado.
+config ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS
+    int "Limite sem comandos web antes da parada (ms)"
+    range 300 1000
+    default 600
 endmenu
 
 menu "Conectividade"
