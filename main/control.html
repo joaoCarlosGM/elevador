@@ -27,7 +27,7 @@ p{line-height:1.5}
 .metric small{display:block;font-size:.72rem;margin-bottom:7px}
 .metric b{font-size:1.15rem;overflow-wrap:anywhere}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-button,select{font:inherit}
+button,select,input{font:inherit}
 button{cursor:pointer;min-height:72px;border-radius:15px;border:1px solid #4f7296;background:#20415e;color:#eaf6ff;font-weight:800;font-size:1.05rem;padding:13px 12px;transition:transform .12s}
 button:active:not(:disabled){transform:scale(.985)}
 button:focus-visible,select:focus-visible{outline:3px solid #82e2bb;outline-offset:3px}
@@ -41,7 +41,7 @@ button.save{background:#73521d;border-color:#ae8748;color:#fff0cf}
 .note{font-size:.83rem;color:#f3d9ae;border-left:3px solid #b9904d;background:#342d25;padding:10px 12px;border-radius:0 8px 8px 0;line-height:1.45;margin-top:16px}
 .field{display:grid;gap:8px;margin:14px 0}
 .field label{font-size:.88rem;font-weight:700}
-select{padding:13px 10px;color:#eaf6ff;border:1px solid #527092;border-radius:11px;background:#0b1a2c;min-height:48px;width:100%}
+select,input{padding:13px 10px;color:#eaf6ff;border:1px solid #527092;border-radius:11px;background:#0b1a2c;min-height:48px;width:100%}
 details{margin-bottom:15px}summary{cursor:pointer;font-weight:700;font-size:1.02rem;padding:5px 0}
 #message{min-height:24px;font-size:.88rem;color:var(--yellow)}
 footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
@@ -63,9 +63,9 @@ footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
 </div>
 <div class="gauge" role="progressbar" aria-label="Posição estimada" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="gauge"><div id="progress"></div></div>
 <div class="grid">
-<div class="metric"><small>Tempo mínimo</small><b id="minimum">—</b></div><div class="metric"><small>Última subida HOME</small><b id="last-home">—</b></div>
+<div class="metric"><small>Tempo DESCER</small><b id="minimum">—</b></div><div class="metric"><small>Última subida HOME</small><b id="last-home">—</b></div>
 <div class="metric"><small>Descida atual</small><b id="elapsed">—</b></div>
-<div class="metric"><small>Retorno auto.</small><b id="countdown">—</b></div>
+<div class="metric"><small>Tempo SUBIR</small><b id="countdown">—</b></div>
 </div>
 </section>
 <section class="card">
@@ -75,15 +75,21 @@ footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
 <button type="button" class="down" id="down" disabled>↓ DESCER</button>
 <button type="button" class="stop" id="stop" disabled>■ PARAR</button>
 <button type="button" class="secondary" id="home" disabled>⌂ ENCONTRAR HOME</button>
-<button type="button" class="secondary" id="calibrate" disabled>⚙ CALIBRAR MÍNIMO</button>
+
 </div>
-<div class="note" id="help">Primeiro encontre HOME no sensor superior. Não há sensor inferior: o mínimo é uma posição estimada por tempo.</div>
+<div class="note" id="help">SUBIR executa o tempo configurado ou para ao alcançar HOME. DESCER executa o tempo configurado a partir do HOME.</div>
 </section>
 <section class="card">
-<h2>Gravar posição inferior</h2>
-<p class="muted">1. Vá para HOME. 2. Toque em CALIBRAR MÍNIMO. 3. Toque em DESCER. 4. Ao chegar ao ponto desejado, toque em SET MÍNIMO.</p>
-<button type="button" class="save" id="set-min" style="width:100%;min-height:76px" disabled>✓ SET MÍNIMO · SALVAR</button>
-<p class="muted" style="font-size:.83rem">Ao salvar, o motor para e o elevador volta automaticamente ao HOME. Quando atinge o mínimo no modo normal, retorna ao HOME após 10 segundos.</p>
+<h2>Tempos de movimento</h2>
+<p class="muted">Defina quanto tempo o motor deve girar em cada sentido. Não precisa calibrar antes de DESCER. O HOME superior interrompe a subida ao ser acionado.</p>
+<div class="actions">
+<div class="field"><label for="up-time">SUBIR (segundos)</label>
+<input id="up-time" type="number" inputmode="decimal" min="0.5" max="20" step="0.1" value="3"></div>
+<div class="field"><label for="down-time">DESCER (segundos)</label>
+<input id="down-time" type="number" inputmode="decimal" min="0.5" max="20" step="0.1" value="3"></div>
+</div>
+<button type="button" id="save-times" class="secondary" style="width:100%">Salvar tempos de movimento</button>
+<p class="muted" style="font-size:.83rem">Faixa: 0,5 a 20 segundos (limitada também pelos timeouts do firmware). A configuração fica salva após reiniciar.</p>
 </section>
 <section class="card">
 <details>
@@ -112,12 +118,13 @@ footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
 'use strict';
 const $=id=>document.getElementById(id);
 const names={UNKNOWN:'POSIÇÃO DESCONHECIDA',HOME:'NO HOME',CAL_READY:'CALIBRAÇÃO PRONTA',HOMING:'SUBINDO PARA HOME',HOME_VERIFY:'VERIFICANDO HOME',CAL_DOWN:'CALIBRANDO DESCIDA',SAVING_MIN:'GRAVANDO MÍNIMO',DOWN:'DESCENDO',MIN:'NO MÍNIMO',FAULT:'FALHA — MOTOR BLOQUEADO'};
-const ui={ready:false,busy:false,state:'UNKNOWN',online:false,settingsLoaded:false,settings:{up_in1_high:1,home_active_level:1}};
+const ui={ready:false,busy:false,state:'UNKNOWN',online:false,settingsLoaded:false,timingLoaded:false,up_ms:3000,down_ms:3000,settings:{up_in1_high:1,home_active_level:1}};
 const time=ms=>ms>0?(ms/1000).toFixed(2)+' s':'—';
 function hint(message){$('message').textContent=message;}
 function enable(id,on){$(id).disabled=!on||(id!=='stop'&&ui.busy);}
 function display(s){
- if(!s||!Object.hasOwn(names,s.state)||!s.settings||!Number.isFinite(s.min_ms))throw Error('Telemetria inválida');
+ if(!s||!Object.hasOwn(names,s.state)||!s.settings||
+    !Number.isFinite(s.up_ms)||!Number.isFinite(s.down_ms))throw Error('Telemetria inválida');
  ui.state=s.state;ui.ready=!!s.ready;ui.online=true;
  $('connection').textContent=s.ready?'CONECTADO':'BLOQUEADO';
  $('connection').className='chip '+(s.ready?'good':'error');
@@ -125,40 +132,44 @@ function display(s){
  $('state').className=s.state==='FAULT'?'error':'';
  $('description').textContent=s.fault?('Motivo: '+s.fault):s.ready?'Controle disponível':'Verifique as proteções físicas, o menuconfig e a senha do AP';
  $('home-indicator').textContent=s.top_active?'HOME ATIVO':'HOME LIVRE';
- $('minimum').textContent=time(s.min_ms);
+ $('minimum').textContent=time(s.down_ms);
  $('last-home').textContent=time(s.last_home_ms||0);
  $('elapsed').textContent=time(s.elapsed_ms);
- $('countdown').textContent=time(s.return_wait_ms);
+ $('countdown').textContent=time(s.up_ms);
  const pct=s.position_pct>=0?Math.min(100,s.position_pct):0;
  $('progress').style.width=pct+'%';$('gauge').setAttribute('aria-valuenow',String(pct));
  $('gauge').setAttribute('aria-valuetext',s.position_pct<0?'Posição desconhecida':pct+'% do curso estimado');
  enable('stop',true);
  const ready=s.ready;
- enable('home',ready&&['UNKNOWN','MIN','HOME','CAL_READY'].includes(s.state));
- enable('up',ready&&['UNKNOWN','MIN','CAL_READY'].includes(s.state));
- enable('down',ready&&s.top_active&&((s.state==='HOME'&&s.min_ms>0)||s.state==='CAL_READY'));
- enable('calibrate',ready&&s.state==='HOME');
- enable('set-min',ready&&s.state==='CAL_DOWN'&&s.elapsed_ms>=400);
+ enable('home',ready&&['UNKNOWN','MIN','HOME'].includes(s.state));
+ enable('up',ready&&['UNKNOWN','MIN'].includes(s.state)&&!s.top_active);
+ enable('down',ready&&s.top_active&&s.state==='HOME');
  enable('save-settings',s.online!==false&&['HOME','UNKNOWN','FAULT'].includes(s.state)&&!s.settings.saving);
+ enable('save-times',s.online!==false&&['HOME','UNKNOWN','MIN'].includes(s.state)&&!s.settings.saving);
+ if(!ui.timingLoaded && !s.settings.saving) {
+  ui.timingLoaded=true;
+  $('up-time').value=String(s.up_ms/1000);
+  $('down-time').value=String(s.down_ms/1000);
+ }
+ ui.up_ms=s.up_ms;ui.down_ms=s.down_ms;
  if(!ui.settingsLoaded&&!s.settings.saving){
   ui.settingsLoaded=true;
   $('direction').value=String(s.settings.up_in1_high);
   $('polarity').value=String(s.settings.home_active_level);
  }
- $('help').textContent=s.state==='CAL_READY'?'Agora toque em DESCER; quando chegar ao ponto inferior desejado, pressione SET MÍNIMO.':
- s.state==='MIN'?'Retorno automático para HOME em 10 segundos.':
- s.state==='SAVING_MIN'?'Gravando tempo na NVS; depois o elevador volta ao HOME.':
- s.state==='UNKNOWN'?'Use ENCONTRAR HOME antes da descida normal ou calibração.':
- s.state==='FAULT'?'Corte a alimentação do motor e verifique a causa.':
- s.state==='HOME'&&!s.min_ms?'HOME confirmado. Calibre o mínimo para habilitar DESCER.':
- s.state==='HOME'?'HOME confirmado. DESCER liberado; SUBIR permanece desabilitado no topo.':
- 'O HOME é determinado pelo sensor superior; a posição inferior é estimada por tempo.';
+ $('help').textContent=s.state==='HOME'?'HOME ativo. DESCER disponível pelo tempo salvo.':
+ s.state==='MIN'?'Descida encerrada. SUBIR disponível por tempo ou até HOME.':
+ s.state==='UNKNOWN'?'Posição desconhecida. SUBIR disponível por tempo até HOME.':
+ s.state==='FAULT'?'Falha detectada. Verifique a causa antes de movimentar.':
+ s.state==='DOWN'?'Descendo pelo tempo configurado. PARAR interrompe.':
+ s.state==='HOMING'?'Subindo pelo tempo configurado ou até ativar HOME.':
+ 'Controle manual por tempos independentes.';
 }
 function offline(message){
  ui.online=false;ui.ready=false;ui.state='UNKNOWN';$('connection').textContent='SEM CONEXÃO';
  $('connection').className='chip error';$('state').textContent='SEM TELEMETRIA';
  $('description').textContent=message;
- for(const id of ['up','down','stop','home','calibrate','set-min','save-settings'])$(id).disabled=true;
+ for(const id of ['up','down','stop','home','save-times','save-settings'])$(id).disabled=true;
  $('progress').style.width='0%';$('home-indicator').textContent='HOME ?';
 }
 async function send(path,body){
@@ -177,13 +188,23 @@ async function send(path,body){
   if(!response.ok||!data.accepted)throw Error(data.error||'intertravamento');
   hint('Comando aceito. Aguardando confirmação de estado…');
   if(path==='/api/settings')ui.settingsLoaded=false;
+  if(path==='/api/times')ui.timingLoaded=false;
  }catch(e){hint('Comando recusado: '+e.message);}
  finally{if(!isStop)ui.busy=false;}
 }
 for(const [id,action] of [['home','home'],['up','up'],['down','down'],
- ['stop','stop'],['calibrate','calibrate'],['set-min','set-min']]){
+ ['stop','stop']]){
  $(id).addEventListener('click',()=>void send('/api/'+action));
 }
+$('save-times').addEventListener('click',()=>{
+ const up=Math.round(Number($('up-time').value)*1000);
+ const down=Math.round(Number($('down-time').value)*1000);
+ if(!Number.isFinite(up)||!Number.isFinite(down)||up<500||down<500||up>20000||down>20000){
+  hint('Informe tempos entre 0,5 e 20 segundos.');return;
+ }
+ if(up===ui.up_ms&&down===ui.down_ms){hint('Tempos já estão salvos.');return;}
+ void send('/api/times','up_ms='+up+'&down_ms='+down);
+});
 $('save-settings').addEventListener('click',()=>{
  const a=+$('direction').value,b=+$('polarity').value;
  if(a===ui.settings.up_in1_high&&b===ui.settings.home_active_level){hint('Nenhuma mudança para salvar.');return;}
