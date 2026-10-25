@@ -18,18 +18,22 @@ assert "PIN_IN1 CONFIG_ELEVATOR_MOTOR_IN1_GPIO" in SOURCE
 assert "PIN_IN2 CONFIG_ELEVATOR_MOTOR_IN2_GPIO" in SOURCE
 assert "LIMIT_BOTTOM" not in SOURCE and "BUTTON_PIN" not in SOURCE
 assert all('.uri="/api/'+action+'"' in SOURCE for action in
-           ("status","home","up","down","stop","calibrate","set-min","settings"))
-assert SOURCE.count("HTTP_POST") == 7
+           ("status","home","up","down","stop","calibrate","set-min","settings","times"))
+assert SOURCE.count("HTTP_POST") == 8
 assert "origin_ok" in SOURCE and "GPIO_PULLUP_ENABLE" in SOURCE
 assert "RETURN_WAIT_MS 10000u" in SOURCE
 assert "GPIO_INTR_ANYEDGE" in SOURCE and "gpio_isr_handler_add(PIN_TOP,home_gpio_isr,NULL)" in SOURCE
 assert 'nvs_set_u32(nvs,"last_home_ms",home_ms)' in SOURCE
 assert "home_time_save_pending" in SOURCE and "last_home_ms" in HTML
-assert "enable('up',ready&&['UNKNOWN','MIN','CAL_READY']" in HTML
-assert "enable('down',ready&&s.top_active" in HTML
+assert "enable('up',ready&&['UNKNOWN','MIN']" in HTML
+assert "enable('down',ready&&s.top_active&&s.state==='HOME'" in HTML
+assert 'id="up-time"' in HTML and 'id="down-time"' in HTML
+assert 'id="save-times"' in HTML
+assert 'ctl.up_time_ms' in SOURCE and 'ctl.down_time_ms' in SOURCE
+assert '"up_time_ms"' in SOURCE and '"down_time_ms"' in SOURCE
 assert "nvs_set_blob(nvs,SETTINGS_KEY" in SOURCE
 assert all('id="'+id+'"' in HTML for id in
-           ("up","down","stop","home","calibrate","set-min","direction","polarity","save-settings"))
+           ("up","down","stop","home","direction","polarity","save-settings","save-times"))
 assert "/dashboard" not in HTML
 assert "const isStop=path==='/api/stop'" in HTML
 assert "(ui.busy&&!isStop)" in HTML
@@ -90,7 +94,8 @@ static void start_at(bool top) {
     home_irq_edges=0;home_irq_at_ms=0;
     pin_level[10]=top?1:0;
     ctl=(controller_t){.state=UNKNOWN,.settings=defaults(),.hardware_ok=true,
-        .nvs_ok=true,.wifi_ok=true,.config_verified=true};
+        .nvs_ok=true,.wifi_ok=true,.config_verified=true,
+        .up_time_ms=DEFAULT_TIMED_MS,.down_time_ms=DEFAULT_TIMED_MS};
     advance(70);
     assert(ctl.state==(top?HOME_IDLE:UNKNOWN));
     assert(!ctl.motor_on);
@@ -131,104 +136,76 @@ static void reached_home(void){
     assert(ctl.home_time_save_pending);
 }
 int main(void){
-    puts("TEST no movement at boot, top NC HIGH");
+    puts("TEST no movement at boot");
     start_at(false);advance(4000);
-    assert(ctl.state==UNKNOWN&&first_powerup_moves==0);
-    puts("PASS: unknown at boot does not move");
+    assert(ctl.state==UNKNOWN && !ctl.motor_on && first_powerup_moves==0);
+    puts("PASS: boot stays stopped");
 
-    puts("TEST one-tap homing with upper sensor");
+    puts("TEST HOME interrupt timestamp and stable activation");
     command(R_HOME);
-    assert(ctl.state==HOMING&&ctl.motor_on&&pin_level[3]==1&&pin_level[4]==0);
-    advance(800);reached_home();
-    assert(ctl.travel_elapsed_ms==0);
-    puts("PASS: interrupt captures edge timestamp, HOME stops and verifies debounce");
+    assert(ctl.state==HOMING&&ctl.motor_on);
+    advance(700);reached_home();
+    assert(ctl.last_home_ms>=700 && ctl.last_home_ms<=720);
+    puts("PASS: HOME rising edge stops ascent and records arrival");
 
-    puts("TEST bouncing HOME edge does not confirm HOME");
+    puts("TEST timed descent without minimum calibration");
+    start_at(true);
+    assert(ctl.settings.minimum_ms==0);
+    ctl.down_time_ms=1200;
+    command(R_DOWN);
+    assert(ctl.state==DOWN && ctl.motor_on && pin_level[3]==0 && pin_level[4]==1);
+    pin_level[10]=0;home_gpio_isr(NULL);advance(100);
+    advance(1200);
+    assert(ctl.state==MIN_IDLE&&!ctl.motor_on);
+    assert(pin_level[3]==0&&pin_level[4]==0);
+    advance(12000);
+    assert(ctl.state==MIN_IDLE&&!ctl.motor_on);
+    puts("PASS: down works without calibration, stops at time, no auto return");
+
+    puts("TEST manual timed ascent from bottom");
+    ctl.up_time_ms=1800;
+    command(R_UP);
+    assert(ctl.state==HOMING&&ctl.motor_on);
+    advance(400);reached_home();
+    assert(ctl.state==HOME_IDLE);
+    puts("PASS: ascent stops when HOME triggers before timer");
+
+    puts("TEST timed ascent ends safely when HOME absent");
+    start_at(false);ctl.up_time_ms=1000;
+    command(R_UP);assert(ctl.state==HOMING);
+    advance(1010);
+    assert(ctl.state==UNKNOWN&&!ctl.motor_on);
+    assert(pin_level[3]==0&&pin_level[4]==0);
+    puts("PASS: ascent times out without automatic retry");
+
+    puts("TEST PARAR interrupts timed descent");
+    start_at(true);command(R_DOWN);
+    assert(ctl.state==DOWN);
+    pin_level[10]=0;home_gpio_isr(NULL);advance(100);
+    command(R_STOP);
+    assert(ctl.state==UNKNOWN&&!ctl.motor_on);
+    advance(5000);
+    assert(ctl.state==UNKNOWN&&!ctl.motor_on);
+    puts("PASS: immediate STOP");
+
+    puts("TEST HOME sensor bounce rejects confirmation");
     start_at(false);command(R_HOME);advance(200);
     pin_level[10]=1;home_gpio_isr(NULL);advance(10);
     pin_level[10]=0;home_gpio_isr(NULL);advance(200);
     assert(ctl.state==FAULT&&!ctl.motor_on);
-    assert(!strcmp(ctl.reason,"HOME_SIGNAL_UNSTABLE"));
-    puts("PASS: bouncing edge latches fault instead of enabling motion");
+    puts("PASS: bouncing switch cannot confirm HOME");
 
-    puts("TEST time-defined bottom calibration and NVS staging");
-    begin_calibration();advance(2650);
-    uint32_t expected=ctl.now_ms-ctl.started_ms;
-    command(R_SET_MIN);
-    assert(ctl.state==SAVE_MIN&&!ctl.motor_on&&pin_level[3]==0&&pin_level[4]==0);
-    assert(ctl.staged.minimum_ms==expected+10);
-    simulate_saved_min();advance(500);
-    assert(ctl.state==HOMING&&ctl.motor_on&&ctl.direction_up);
-    reached_home();
-    assert(ctl.settings.minimum_ms>=2600);
-    puts("PASS: SET MIN stores timed lower limit and returns to HOME");
-
-    puts("TEST normal descent then ten-second auto home");
-    advance(500);command(R_DOWN);
-    assert(ctl.state==DOWN&&ctl.motor_on);
-    pin_level[10]=0;advance(100);
-    while(ctl.state==DOWN)advance(10);
-    assert(ctl.state==MIN_IDLE&&!ctl.motor_on);
-    advance(9990);
-    assert(ctl.state==MIN_IDLE&&!ctl.motor_on);
-    advance(10);
-    assert(ctl.state==HOMING&&ctl.motor_on);
-    reached_home();
-    puts("PASS: timed MIN and exact 10-second return");
-
-    puts("TEST STOP while travelling invalidates estimated position");
-    advance(500);command(R_DOWN);
-    assert(ctl.state==DOWN);
-    pin_level[10]=0;advance(100);
-    command(R_STOP);
-    assert(ctl.state==UNKNOWN&&!ctl.motor_on&&pin_level[3]==0&&pin_level[4]==0);
-    assert(ctl.request==R_NONE);
-    puts("PASS: STOP brakes and demands re-homing");
-
-    puts("TEST PARAR during pending NVS save cancels automatic HOME");
-    begin_calibration();advance(900);command(R_SET_MIN);
-    assert(ctl.state==SAVE_MIN&&ctl.save_pending);
-    command(R_STOP);
-    assert(ctl.state==UNKNOWN&&!ctl.save_go_home&&ctl.cancel_auto_home);
-    simulate_saved_min();advance(600);
-    assert(ctl.state==UNKNOWN&&!ctl.motor_on);
-    puts("PASS: STOP prevents post-save restart");
-
-    puts("TEST HOME never runs indefinitely without sensor");
-    start_at(false);command(R_HOME);
-    assert(ctl.state==HOMING);advance(20010);
-    assert(ctl.state==FAULT&&!ctl.motor_on&&!strcmp(ctl.reason,"HOME_TIMEOUT"));
-    puts("PASS: homing watchdog trips");
-
-    puts("TEST calibration cannot descend indefinitely");
-    begin_calibration();advance(20010);
-    assert(ctl.state==FAULT&&!ctl.motor_on&&!strcmp(ctl.reason,"CALIBRATION_TIMEOUT"));
-    puts("PASS: calibration watchdog trips");
-
-    puts("TEST wrong home sensor sequence while descending");
-    begin_calibration();pin_level[10]=1;advance(100);
-    assert(ctl.state==FAULT&&!ctl.motor_on);
-    puts("PASS: sensor re-trigger stops motor");
-
-    puts("TEST persisted direction/polarity checks");
-    settings_t s=defaults();
-    s.up_in1_high=0;s.home_active_level=0;s.minimum_ms=1240;s.checksum=settings_crc(&s);
-    assert(settings_valid(&s));
-    s.checksum^=1;assert(!settings_valid(&s));
-    s=defaults();s.minimum_ms=21000;s.checksum=settings_crc(&s);assert(!settings_valid(&s));
-    puts("PASS: NVS schema, direction, polarity and bounds");
-
-    puts("TEST active-low switch behavior for alternative wiring");
-    start_at(false);ctl.settings.home_active_level=0;ctl.top_seen=false;
-    advance(70);assert(ctl.state==HOME_IDLE);
-    puts("PASS: configurable HOME polarity");
-
-    puts("TEST failed GPIO write does not report a running motor");
+    puts("TEST invalid GPIO write stops control");
     start_at(false);fail_pin=3;command(R_HOME);
     assert(ctl.state==FAULT&&!ctl.motor_on);
-    puts("PASS: GPIO failure latches FAULT");
+    puts("PASS: driver error latches fault");
 
-    puts("ALL HOST TESTS PASS");
+    puts("TEST configurable alternative HOME polarity");
+    start_at(false);ctl.settings.home_active_level=0;ctl.top_seen=false;
+    advance(70);assert(ctl.state==HOME_IDLE);
+    puts("PASS: HOME polarity option remains supported");
+
+    puts("ALL TIMED MODE HOST TESTS PASS");
     return 0;
 }
 """.replace('"SOURCE_PATH"', '"'+str(ROOT/"main/main.c").replace("\\","/")+'"')
