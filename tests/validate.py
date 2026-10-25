@@ -26,6 +26,8 @@ assert "nvs_set_blob(nvs,SETTINGS_KEY" in SOURCE
 assert all('id="'+id+'"' in HTML for id in
            ("up","down","stop","home","calibrate","set-min","direction","polarity","save-settings"))
 assert "/dashboard" not in HTML
+assert "const isStop=path==='/api/stop'" in HTML
+assert "(ui.busy&&!isStop)" in HTML
 assert "GPIO20" not in CONFIG and "LIMIT_BOTTOM" not in CONFIG
 print("PASS architecture: one HOME input, timed minimum, 8 API routes, NVS controls")
 
