@@ -59,14 +59,28 @@ typedef struct {
     bool hardware_ok, nvs_ok, wifi_ok, motor_on, direction_up;
     bool top_raw, top_stable, top_seen, top_released, timer_running;
     bool fault_latched, config_verified;
+    bool home_edge_pending, home_time_save_pending;
     char reason[40];
     uint32_t started_ms, last_brake_ms, home_verify_ms, at_min_ms;
     uint32_t top_change_ms, travel_elapsed_ms, staged_minimum_ms;
+    uint32_t home_irq_seen, home_active_edge_ms, home_arrival_ms, last_home_ms;
     uint32_t now_ms;
 } controller_t;
 static controller_t ctl;
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE home_irq_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t home_irq_edges, home_irq_at_ms;
 static const char *TAG = "elevador";
+
+/* Capture the edge timestamp only. Debounce, stop and NVS run outside ISR. */
+static void IRAM_ATTR home_gpio_isr(void *arg) {
+    (void)arg;
+    uint32_t at_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    portENTER_CRITICAL_ISR(&home_irq_mux);
+    home_irq_at_ms = at_ms;
+    ++home_irq_edges;
+    portEXIT_CRITICAL_ISR(&home_irq_mux);
+}
 
 static uint32_t clock_ms(void) { return (uint32_t)(esp_timer_get_time()/1000); }
 static const char *state_name(state_t st) {
@@ -128,10 +142,23 @@ static bool start_motor(bool up) {
     ctl.started_ms=ctl.now_ms;
     ctl.travel_elapsed_ms=0;
     ctl.top_released=!ctl.top_stable;
+    if (up) { ctl.home_edge_pending=false; ctl.home_arrival_ms=0; }
     return true;
 }
 static void update_top(void) {
+    uint32_t edges, edge_ms;
+    portENTER_CRITICAL(&home_irq_mux);
+    edges=home_irq_edges; edge_ms=home_irq_at_ms;
+    portEXIT_CRITICAL(&home_irq_mux);
     bool active=gpio_get_level(PIN_TOP)==ctl.settings.home_active_level;
+    if (edges!=ctl.home_irq_seen) {
+        ctl.home_irq_seen=edges;
+        /* LOW->HIGH is active for NC/GND; ANYEDGE supports inverse polarity. */
+        if (active) {
+            ctl.home_active_edge_ms=edge_ms;
+            ctl.home_edge_pending=true;
+        }
+    }
     if (!ctl.top_seen || active!=ctl.top_raw) {
         ctl.top_seen=true;
         ctl.top_raw=active;
@@ -188,6 +215,13 @@ static void controller_tick(void *unused) {
     switch (ctl.state) {
     case HOMING:
         if (ctl.top_raw) {
+            uint32_t arrived=ctl.now_ms;
+            if (ctl.home_edge_pending &&
+                (uint32_t)(ctl.home_active_edge_ms-ctl.started_ms)<=MAX_HOME_MS &&
+                (uint32_t)(ctl.now_ms-ctl.home_active_edge_ms)<=1000u)
+                arrived=ctl.home_active_edge_ms;
+            ctl.home_edge_pending=false;
+            ctl.home_arrival_ms=arrived;
             if (!brake()) { fault("GPIO_STOP_FAILED"); break; }
             ctl.state=HOME_VERIFY;
             ctl.home_verify_ms=ctl.now_ms;
@@ -199,6 +233,9 @@ static void controller_tick(void *unused) {
     case HOME_VERIFY:
         if (ctl.top_stable && ctl.top_raw) {
             ctl.state=HOME_IDLE; ctl.travel_elapsed_ms=0;
+            /* Measured ascent never overwrites calibrated descent time. */
+            ctl.last_home_ms=ctl.home_arrival_ms-ctl.started_ms;
+            ctl.home_time_save_pending=true;
         } else if ((uint32_t)(ctl.now_ms-ctl.home_verify_ms)>DEBOUNCE_MS*4)
             fault("HOME_SIGNAL_UNSTABLE");
         break;
@@ -288,13 +325,25 @@ static bool save_blob(const settings_t *value) {
     return result==ESP_OK;
 }
 static void flush_pending(void) {
-    settings_t copy;bool do_save=false,go_home=false;
+    settings_t copy;bool do_save=false,go_home=false,save_home=false;
+    uint32_t home_ms=0;
     portENTER_CRITICAL(&mux);
     if (ctl.save_pending && !ctl.saving) {
         ctl.saving=true; do_save=true; copy=ctl.staged;
         go_home=ctl.save_go_home;
+    } else if (ctl.home_time_save_pending && !ctl.saving && !ctl.motor_on) {
+        ctl.saving=true; save_home=true; home_ms=ctl.last_home_ms;
     }
     portEXIT_CRITICAL(&mux);
+    if (save_home) {
+        esp_err_t e=nvs_set_u32(nvs,"last_home_ms",home_ms);
+        if (e==ESP_OK) e=nvs_commit(nvs);
+        portENTER_CRITICAL(&mux);
+        ctl.saving=false; ctl.home_time_save_pending=false;
+        if (e!=ESP_OK) fault("NVS_SAVE_FAILED");
+        portEXIT_CRITICAL(&mux);
+        return;
+    }
     if (!do_save) return;
     bool ok=save_blob(&copy);
     portENTER_CRITICAL(&mux);
@@ -339,7 +388,7 @@ static bool origin_ok(httpd_req_t *req) {
 static esp_err_t status_handler(httpd_req_t *req) {
     controller_t s;
     portENTER_CRITICAL(&mux);s=ctl;portEXIT_CRITICAL(&mux);
-    char buf[680];
+    char buf[760];
     bool running=s.motor_on;
     uint32_t at=s.state==CAL_DOWN||s.state==DOWN||s.state==HOMING ?
         clock_ms()-s.started_ms : s.travel_elapsed_ms;
@@ -355,13 +404,13 @@ static esp_err_t status_handler(httpd_req_t *req) {
         !s.fault_latched&&!s.save_pending&&!s.saving;
     int n=snprintf(buf,sizeof(buf),
         "{\"state\":\"%s\",\"fault\":\"%s\",\"top_active\":%s,"
-        "\"min_ms\":%"PRIu32",\"elapsed_ms\":%"PRIu32",\"position_pct\":%d,"
+        "\"min_ms\":%"PRIu32",\"last_home_ms\":%"PRIu32",\"elapsed_ms\":%"PRIu32",\"position_pct\":%d,"
         "\"motor\":\"%s\",\"settings\":{\"up_in1_high\":%u,"
         "\"home_active_level\":%u,\"saving\":%s},"
         "\"ready\":%s,\"wifi_ok\":%s,\"hardware_ok\":%s,"
         "\"calibrating\":%s,\"return_wait_ms\":%"PRIu32",\"uptime_ms\":%"PRIu32"}",
         state_name(s.state),s.reason,s.top_stable&&s.top_raw?"true":"false",
-        s.settings.minimum_ms,at,percent,
+        s.settings.minimum_ms,s.last_home_ms,at,percent,
         running?(s.direction_up?"UP":"DOWN"):"STOP",
         s.settings.up_in1_high,s.settings.home_active_level,
         s.saving||s.save_pending?"true":"false",
@@ -512,8 +561,10 @@ void app_main(void) {
            .mode=GPIO_MODE_OUTPUT,.pull_down_en=GPIO_PULLDOWN_ENABLE};
         c=gpio_config(&out);
         gpio_config_t in={.pin_bit_mask=1ULL<<PIN_TOP,.mode=GPIO_MODE_INPUT,
-           .pull_up_en=GPIO_PULLUP_ENABLE,.intr_type=GPIO_INTR_DISABLE};
+           .pull_up_en=GPIO_PULLUP_ENABLE,.intr_type=GPIO_INTR_ANYEDGE};
         d=gpio_config(&in);
+        if (d==ESP_OK) d=gpio_install_isr_service(0);
+        if (d==ESP_OK) d=gpio_isr_handler_add(PIN_TOP,home_gpio_isr,NULL);
     }
     ctl.hardware_ok=map_ok&&a==ESP_OK&&b==ESP_OK&&c==ESP_OK&&d==ESP_OK;
     if(!ctl.hardware_ok){ctl.fault_latched=true;ctl.state=FAULT;
@@ -528,6 +579,10 @@ void app_main(void) {
         else if(r!=ESP_OK||len!=sizeof(ctl.settings)||!settings_valid(&ctl.settings)) {
             ctl.settings=defaults();fault("NVS_INVALID");
         }
+        uint32_t last_home=0;
+        esp_err_t last=nvs_get_u32(nvs,"last_home_ms",&last_home);
+        if (last==ESP_OK) ctl.last_home_ms=last_home;
+        else if (last!=ESP_ERR_NVS_NOT_FOUND) fault("NVS_INVALID");
     }else fault("NVS_UNAVAILABLE");
     ctl.now_ms=clock_ms();
     if(ctl.hardware_ok&&!brake())fault("GPIO_STOP_FAILED");
