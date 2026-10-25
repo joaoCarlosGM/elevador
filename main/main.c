@@ -161,9 +161,12 @@ static void controller_tick(void *unused) {
     update_top();
     request_t r=ctl.request; ctl.request=R_NONE;
     if (r==R_STOP) {
+        bool known_home=(ctl.state==HOME_IDLE||ctl.state==CAL_READY) &&
+            ctl.top_stable && ctl.top_raw;
+        ctl.auto_home_after_save=false;
         if (!brake()) fault("GPIO_STOP_FAILED");
         else if (ctl.state!=FAULT) {
-            ctl.state=UNKNOWN; /* no encoder: position after interruption unknown */
+            ctl.state=known_home?HOME_IDLE:UNKNOWN;
             ctl.travel_elapsed_ms=0;
         }
         portEXIT_CRITICAL(&mux); return;
@@ -175,7 +178,9 @@ static void controller_tick(void *unused) {
     if (ctl.state==FAULT || ctl.saving || ctl.save_pending) {
         portEXIT_CRITICAL(&mux); return;
     }
-    if (ctl.state==UNKNOWN && ctl.top_stable && ctl.top_raw) {
+    if (ctl.state==UNKNOWN && ctl.top_seen &&
+        (uint32_t)(ctl.now_ms-ctl.top_change_ms)>=DEBOUNCE_MS &&
+        ctl.top_stable && ctl.top_raw) {
         ctl.state=HOME_IDLE; ctl.travel_elapsed_ms=0;
     }
     switch (ctl.state) {
@@ -221,6 +226,13 @@ static void controller_tick(void *unused) {
     default: break;
     }
     if (!ready()) { portEXIT_CRITICAL(&mux); return; }
+    if ((r==R_HOME||r==R_UP||r==R_DOWN) &&
+        (uint32_t)(ctl.now_ms-ctl.last_brake_ms)<REVERSE_MS) {
+        /* Retain a one-tap command until the fixed reversal dwell expires. */
+        ctl.request=r;
+        portEXIT_CRITICAL(&mux);
+        return;
+    }
     /* SET MIN returns HOME after the NVS commit and the reversal dwell. */
     if (ctl.auto_home_after_save && ctl.state==UNKNOWN &&
         (uint32_t)(ctl.now_ms-ctl.last_brake_ms)>=REVERSE_MS) {
