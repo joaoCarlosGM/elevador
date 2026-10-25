@@ -419,8 +419,8 @@ static esp_err_t status_handler(httpd_req_t *req) {
                         s.state==MIN_IDLE || s.state==DOWN || s.state==CAL_DOWN;
     int percent=s.state==HOME_IDLE||s.state==CAL_READY?0:
         s.state==MIN_IDLE?100:
-        s.settings.minimum_ms && position_known ?
-          (int)((uint64_t)at*100/s.settings.minimum_ms) : -1;
+        s.down_time_ms && position_known ?
+          (int)((uint64_t)at*100/s.down_time_ms) : -1;
     if (percent>100) percent=100;
     bool snapshot_ready=s.hardware_ok&&s.nvs_ok&&s.wifi_ok&&s.config_verified&&
         s.top_seen&&(uint32_t)(s.now_ms-s.top_change_ms)>=DEBOUNCE_MS&&
@@ -436,7 +436,7 @@ static esp_err_t status_handler(httpd_req_t *req) {
         s.settings.minimum_ms,s.last_home_ms,s.up_time_ms,s.down_time_ms,at,percent,
         running?(s.direction_up?"UP":"DOWN"):"STOP",
         s.settings.up_in1_high,s.settings.home_active_level,
-        s.saving||s.save_pending?"true":"false",
+        s.saving||s.save_pending||s.times_save_pending?"true":"false",
         snapshot_ready?"true":"false",
         s.wifi_ok?"true":"false",s.hardware_ok?"true":"false",
         s.state==CAL_DOWN||s.state==CAL_READY?"true":"false",
