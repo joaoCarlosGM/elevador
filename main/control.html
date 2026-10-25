@@ -22,7 +22,7 @@ p{line-height:1.5}
 #state{font-weight:800;font-size:1.54rem;overflow-wrap:anywhere}#state.error{color:var(--red)}
 .gauge{height:9px;background:#273e54;border-radius:100px;overflow:hidden;margin:18px 0 10px}
 #progress{width:0;height:100%;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .24s}
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .metric{background:#0d1b2a;border:1px solid #354a60;border-radius:13px;padding:12px;min-height:78px}
 .metric small{display:block;font-size:.72rem;margin-bottom:7px}
 .metric b{font-size:1.15rem;overflow-wrap:anywhere}
@@ -45,7 +45,7 @@ select{padding:13px 10px;color:#eaf6ff;border:1px solid #527092;border-radius:11
 details{margin-bottom:15px}summary{cursor:pointer;font-weight:700;font-size:1.02rem;padding:5px 0}
 #message{min-height:24px;font-size:.88rem;color:var(--yellow)}
 footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
-@media(max-width:510px){main{padding:16px 12px 35px}.card{padding:16px;border-radius:16px}h1{font-size:1.34rem}.grid{gap:6px}.metric{padding:9px}.metric b{font-size:.98rem}.actions{gap:9px}button{font-size:1rem;min-height:77px}}
+@media(max-width:510px){main{padding:16px 12px 35px}.card{padding:16px;border-radius:16px}h1{font-size:1.34rem}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.metric{padding:9px}.metric b{font-size:.98rem}.actions{gap:9px}button{font-size:1rem;min-height:77px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -63,7 +63,7 @@ footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
 </div>
 <div class="gauge" role="progressbar" aria-label="Posição estimada" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="gauge"><div id="progress"></div></div>
 <div class="grid">
-<div class="metric"><small>Tempo mínimo</small><b id="minimum">—</b></div>
+<div class="metric"><small>Tempo mínimo</small><b id="minimum">—</b></div><div class="metric"><small>Última subida HOME</small><b id="last-home">—</b></div>
 <div class="metric"><small>Descida atual</small><b id="elapsed">—</b></div>
 <div class="metric"><small>Retorno auto.</small><b id="countdown">—</b></div>
 </div>
@@ -126,6 +126,7 @@ function display(s){
  $('description').textContent=s.fault?('Motivo: '+s.fault):s.ready?'Controle disponível':'Verifique as proteções físicas, o menuconfig e a senha do AP';
  $('home-indicator').textContent=s.top_active?'HOME ATIVO':'HOME LIVRE';
  $('minimum').textContent=time(s.min_ms);
+ $('last-home').textContent=time(s.last_home_ms||0);
  $('elapsed').textContent=time(s.elapsed_ms);
  $('countdown').textContent=time(s.return_wait_ms);
  const pct=s.position_pct>=0?Math.min(100,s.position_pct):0;
@@ -134,8 +135,8 @@ function display(s){
  enable('stop',true);
  const ready=s.ready;
  enable('home',ready&&['UNKNOWN','MIN','HOME','CAL_READY'].includes(s.state));
- enable('up',ready&&['UNKNOWN','MIN','HOME','CAL_READY'].includes(s.state));
- enable('down',ready&&((s.state==='HOME'&&s.min_ms>0)||s.state==='CAL_READY'));
+ enable('up',ready&&['UNKNOWN','MIN','CAL_READY'].includes(s.state));
+ enable('down',ready&&s.top_active&&((s.state==='HOME'&&s.min_ms>0)||s.state==='CAL_READY'));
  enable('calibrate',ready&&s.state==='HOME');
  enable('set-min',ready&&s.state==='CAL_DOWN'&&s.elapsed_ms>=400);
  enable('save-settings',s.online!==false&&['HOME','UNKNOWN','FAULT'].includes(s.state)&&!s.settings.saving);
@@ -149,6 +150,8 @@ function display(s){
  s.state==='SAVING_MIN'?'Gravando tempo na NVS; depois o elevador volta ao HOME.':
  s.state==='UNKNOWN'?'Use ENCONTRAR HOME antes da descida normal ou calibração.':
  s.state==='FAULT'?'Corte a alimentação do motor e verifique a causa.':
+ s.state==='HOME'&&!s.min_ms?'HOME confirmado. Calibre o mínimo para habilitar DESCER.':
+ s.state==='HOME'?'HOME confirmado. DESCER liberado; SUBIR permanece desabilitado no topo.':
  'O HOME é determinado pelo sensor superior; a posição inferior é estimada por tempo.';
 }
 function offline(message){
