@@ -55,6 +55,7 @@ typedef struct {
     request_t request;
     settings_t settings, staged;
     bool save_pending, saving, save_go_home, auto_home_after_save;
+    bool cancel_auto_home;
     bool hardware_ok, nvs_ok, wifi_ok, motor_on, direction_up;
     bool top_raw, top_stable, top_seen, top_released, timer_running;
     bool fault_latched, config_verified;
@@ -164,6 +165,7 @@ static void controller_tick(void *unused) {
         bool known_home=(ctl.state==HOME_IDLE||ctl.state==CAL_READY) &&
             ctl.top_stable && ctl.top_raw;
         ctl.auto_home_after_save=false;
+        ctl.save_go_home=false; ctl.cancel_auto_home=true;
         if (!brake()) fault("GPIO_STOP_FAILED");
         else if (ctl.state!=FAULT) {
             ctl.state=known_home?HOME_IDLE:UNKNOWN;
@@ -246,8 +248,10 @@ static void controller_tick(void *unused) {
             ctl.state==HOME_IDLE || ctl.state==CAL_READY) begin_home();
         break;
     case R_BEGIN_CAL:
-        if (ctl.state==HOME_IDLE && ctl.top_stable && ctl.top_raw)
+        if (ctl.state==HOME_IDLE && ctl.top_stable && ctl.top_raw) {
+            ctl.cancel_auto_home=false;
             ctl.state=CAL_READY;
+        }
         break;
     case R_DOWN:
         if (ctl.state==CAL_READY && ctl.top_stable && ctl.top_raw) {
@@ -299,7 +303,8 @@ static void flush_pending(void) {
     else {
         ctl.settings=copy;
         ctl.state=UNKNOWN; ctl.travel_elapsed_ms=0;
-        ctl.auto_home_after_save=go_home;
+        ctl.auto_home_after_save=go_home && !ctl.cancel_auto_home;
+        ctl.cancel_auto_home=false;
         ctl.top_seen=false; /* recheck physical input with the committed polarity */
         ctl.request=R_NONE;
     }
@@ -432,7 +437,8 @@ static esp_err_t settings_handler(httpd_req_t *req) {
             level!=ctl.settings.home_active_level)
             ctl.staged.minimum_ms=0; /* changing mapping invalidates calibration */
         ctl.staged.checksum=settings_crc(&ctl.staged);
-        ctl.save_go_home=false;ctl.save_pending=true;accepted=true;
+        ctl.save_go_home=false;ctl.cancel_auto_home=false;
+        ctl.save_pending=true;accepted=true;
     }
     portEXIT_CRITICAL(&mux);
     return accepted?json_resp(req,"202 Accepted","{\"accepted\":true}"):
