@@ -100,7 +100,9 @@ static void begin_calibration(void) {
     advance(100);assert(ctl.top_released);
 }
 static void simulate_saved_min(void) {
-    assert(ctl.state==SAVE_MIN&&ctl.save_pending);
+    assert(ctl.save_pending);
+    /* After STOP, the save remains pending but motion state is UNKNOWN. */
+    assert(ctl.state==SAVE_MIN || ctl.state==UNKNOWN);
     assert(settings_valid(&ctl.staged));
     bool go_home=ctl.save_go_home;
     ctl.settings=ctl.staged;
