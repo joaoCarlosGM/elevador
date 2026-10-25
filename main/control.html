@@ -225,7 +225,7 @@ async function poll(){
  setTimeout(poll,350);
 }
 window.addEventListener('pagehide',()=>{
- if(ui.state==='DOWN'||ui.state==='CAL_DOWN'||ui.state==='HOMING')
+ if(['DOWN','CAL_DOWN','HOMING','MIN'].includes(ui.state))
   void fetch('/api/stop',{method:'POST',keepalive:true}).catch(()=>{});
 });
 poll();
