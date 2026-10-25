@@ -22,7 +22,7 @@ p{line-height:1.5}
 #state{font-weight:800;font-size:1.54rem;overflow-wrap:anywhere}#state.error{color:var(--red)}
 .gauge{height:9px;background:#273e54;border-radius:100px;overflow:hidden;margin:18px 0 10px}
 #progress{width:0;height:100%;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .24s}
-.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .metric{background:#0d1b2a;border:1px solid #354a60;border-radius:13px;padding:12px;min-height:78px}
 .metric small{display:block;font-size:.72rem;margin-bottom:7px}
 .metric b{font-size:1.15rem;overflow-wrap:anywhere}
@@ -66,6 +66,7 @@ footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
 <div class="metric"><small>Tempo DESCER</small><b id="minimum">—</b></div><div class="metric"><small>Última subida HOME</small><b id="last-home">—</b></div>
 <div class="metric"><small>Descida atual</small><b id="elapsed">—</b></div>
 <div class="metric"><small>Tempo SUBIR</small><b id="countdown">—</b></div>
+<div class="metric"><small>Retorno automático</small><b id="return-countdown">—</b></div>
 </div>
 </section>
 <section class="card">
@@ -77,11 +78,11 @@ footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
 <button type="button" class="secondary" id="home" disabled>⌂ ENCONTRAR HOME</button>
 
 </div>
-<div class="note" id="help">SUBIR executa o tempo configurado ou para ao alcançar HOME. DESCER executa o tempo configurado a partir do HOME.</div>
+<div class="note" id="help">DESCER executa o tempo configurado, aguarda 10 segundos no mínimo e retorna automaticamente até HOME. PARAR cancela o retorno.</div>
 </section>
 <section class="card">
 <h2>Tempos de movimento</h2>
-<p class="muted">Defina quanto tempo o motor deve girar em cada sentido. Não precisa calibrar antes de DESCER. O HOME superior interrompe a subida ao ser acionado.</p>
+<p class="muted">Defina os tempos manuais de SUBIR e DESCER. Ao concluir DESCER, o elevador aguarda 10 segundos e retorna automaticamente até o sensor HOME (com timeout de proteção). Não precisa calibrar.</p>
 <div class="actions">
 <div class="field"><label for="up-time">SUBIR (segundos)</label>
 <input id="up-time" type="number" inputmode="decimal" min="0.5" max="20" step="0.1" value="3"></div>
@@ -136,6 +137,7 @@ function display(s){
  $('last-home').textContent=time(s.last_home_ms||0);
  $('elapsed').textContent=time(s.elapsed_ms);
  $('countdown').textContent=time(s.up_ms);
+ $('return-countdown').textContent=s.state==='MIN'?time(s.return_wait_ms):'—';
  const pct=s.position_pct>=0?Math.min(100,s.position_pct):0;
  $('progress').style.width=pct+'%';$('gauge').setAttribute('aria-valuenow',String(pct));
  $('gauge').setAttribute('aria-valuetext',s.position_pct<0?'Posição desconhecida':pct+'% do curso estimado');
@@ -158,11 +160,11 @@ function display(s){
   $('polarity').value=String(s.settings.home_active_level);
  }
  $('help').textContent=s.state==='HOME'?'HOME ativo. DESCER disponível pelo tempo salvo.':
- s.state==='MIN'?'Descida encerrada. SUBIR disponível por tempo ou até HOME.':
+ s.state==='MIN'?'No limite inferior. Retorno automático ao HOME em '+time(s.return_wait_ms)+'. PARAR cancela.':
  s.state==='UNKNOWN'?'Posição desconhecida. SUBIR disponível por tempo até HOME.':
  s.state==='FAULT'?'Falha detectada. Verifique a causa antes de movimentar.':
  s.state==='DOWN'?'Descendo pelo tempo configurado. PARAR interrompe.':
- s.state==='HOMING'?'Subindo pelo tempo configurado ou até ativar HOME.':
+ s.state==='HOMING'?'Subindo até HOME (retorno automático/busca) ou pelo tempo configurado (SUBIR manual).':
  'Controle manual por tempos independentes.';
 }
 function offline(message){
