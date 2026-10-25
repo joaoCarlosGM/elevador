@@ -498,19 +498,23 @@ static esp_err_t start_wifi(void) {
 void app_main(void) {
     ctl=(controller_t){.state=UNKNOWN,.settings=defaults(),.now_ms=clock_ms()};
     /* Preload both latches LOW before activating pad output. */
-    esp_err_t a=gpio_set_level(PIN_IN1,0);
-    esp_err_t b=gpio_set_level(PIN_IN2,0);
-    gpio_config_t out={.pin_bit_mask=(1ULL<<PIN_IN1)|(1ULL<<PIN_IN2),
-       .mode=GPIO_MODE_OUTPUT,.pull_down_en=GPIO_PULLDOWN_ENABLE};
-    esp_err_t c=gpio_config(&out);
-    gpio_config_t in={.pin_bit_mask=1ULL<<PIN_TOP,.mode=GPIO_MODE_INPUT,
-       .pull_up_en=GPIO_PULLUP_ENABLE,.intr_type=GPIO_INTR_DISABLE};
-    esp_err_t d=gpio_config(&in);
     bool map_ok=PIN_IN1!=PIN_IN2 && PIN_IN1!=PIN_TOP && PIN_IN2!=PIN_TOP &&
         PIN_IN1!=2 && PIN_IN1!=8 && PIN_IN1!=9 &&
         PIN_IN2!=2 && PIN_IN2!=8 && PIN_IN2!=9 &&
         PIN_TOP!=2 && PIN_TOP!=8 && PIN_TOP!=9 &&
         PIN_IN1<12 && PIN_IN2<12 && PIN_TOP<12;
+    esp_err_t a=ESP_ERR_INVALID_ARG,b=ESP_ERR_INVALID_ARG;
+    esp_err_t c=ESP_ERR_INVALID_ARG,d=ESP_ERR_INVALID_ARG;
+    if(map_ok) {
+        a=gpio_set_level(PIN_IN1,0);
+        b=gpio_set_level(PIN_IN2,0);
+        gpio_config_t out={.pin_bit_mask=(1ULL<<PIN_IN1)|(1ULL<<PIN_IN2),
+           .mode=GPIO_MODE_OUTPUT,.pull_down_en=GPIO_PULLDOWN_ENABLE};
+        c=gpio_config(&out);
+        gpio_config_t in={.pin_bit_mask=1ULL<<PIN_TOP,.mode=GPIO_MODE_INPUT,
+           .pull_up_en=GPIO_PULLUP_ENABLE,.intr_type=GPIO_INTR_DISABLE};
+        d=gpio_config(&in);
+    }
     ctl.hardware_ok=map_ok&&a==ESP_OK&&b==ESP_OK&&c==ESP_OK&&d==ESP_OK;
     if(!ctl.hardware_ok){ctl.fault_latched=true;ctl.state=FAULT;
         snprintf(ctl.reason,sizeof(ctl.reason),"GPIO_SETUP_FAILED");}
