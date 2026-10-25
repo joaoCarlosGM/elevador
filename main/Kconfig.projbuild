@@ -1,142 +1,45 @@
-menu "Elevador — Configuração do Hardware"
+menu "Elevador — Maquete com HOME superior"
 
-menu "Pinos"
-config ELEVATOR_LIMIT_BOTTOM_GPIO
-    int "Fim inferior"
-    range 0 21
-    default 1
-config ELEVATOR_LIMIT_TOP_GPIO
-    int "Fim superior"
-    range 0 21
-    default 10
-config ELEVATOR_BUTTON_GPIO
-    int "Botao"
-    range 0 21
-    default 20
 config ELEVATOR_MOTOR_IN1_GPIO
-    int "Motor IN1"
+    int "L293D IN1 (padrao GPIO3)"
     range 0 21
     default 3
 config ELEVATOR_MOTOR_IN2_GPIO
-    int "Motor IN2"
+    int "L293D IN2 (padrao GPIO4)"
     range 0 21
     default 4
-config ELEVATOR_STATUS_LED_GPIO
-    int "LED de status"
+config ELEVATOR_HOME_GPIO
+    int "Fim superior HOME NC para GND (padrao GPIO10)"
     range 0 21
-    default 8
-config ELEVATOR_STATUS_LED_ENABLED
-    bool "LED onboard confirmado e habilitado"
-    default n
-config ELEVATOR_STATUS_LED_ACTIVE_LEVEL
-    int "Nivel ativo do LED (0=LOW)"
-    range 0 1
-    default 0
-config ELEVATOR_MOTOR_UP_IN1_HIGH
-    bool "Subida usa IN1 alto / IN2 baixo"
-    default y
-endmenu
-
-menu "Entradas e antirruido"
-config ELEVATOR_LIMIT_TOP_ACTIVE_LEVEL
-    int "Nivel ativo superior (NC para GND: 1)"
-    range 0 1
-    default 1
-config ELEVATOR_LIMIT_BOTTOM_ACTIVE_LEVEL
-    int "Nivel ativo inferior (NC para GND: 1)"
-    range 0 1
-    default 1
-config ELEVATOR_BUTTON_ACTIVE_LEVEL
-    int "Nivel ativo do botao NO para GND"
-    range 0 1
-    default 0
-config ELEVATOR_LIMIT_DEBOUNCE_MS
-    int "Debounce dos fins (ms)"
-    range 10 1000
-    default 35
-config ELEVATOR_BUTTON_DEBOUNCE_MS
-    int "Debounce do botao (ms)"
-    range 10 1000
-    default 50
-config ELEVATOR_SAMPLE_MS
-    int "Periodo de amostragem (ms)"
-    range 1 20
     default 10
-endmenu
 
-menu "Temporizacoes e comissionamento"
-config ELEVATOR_AUTO_UP_WAIT_MS
-    int "Espera inferior antes da subida (ms)"
-    range 10000 600000
-    default 10000
-config ELEVATOR_MIN_UP_MS
-    int "Minimo fisico de subida (ms; zero exige configurar)"
-    range 0 600000
-    default 0
-config ELEVATOR_MAX_UP_MS
-    int "Maximo fisico de subida (ms; zero exige configurar)"
-    range 0 600000
-    default 0
-config ELEVATOR_MIN_DOWN_MS
-    int "Minimo fisico de descida (ms; zero exige configurar)"
-    range 0 600000
-    default 0
-config ELEVATOR_MAX_DOWN_MS
-    int "Maximo fisico de descida (ms; zero exige configurar)"
-    range 0 600000
-    default 0
-config ELEVATOR_START_RELEASE_MS
-    int "Prazo para liberar fim de origem (ms)"
-    range 100 10000
-    default 1500
-config ELEVATOR_REVERSAL_MS
-    int "Intervalo minimo entre comandos de motor (ms)"
-    range 100 10000
-    default 500
-config ELEVATOR_ARM_HOLD_MS
-    int "Pressao longa para armar comissionamento (ms)"
-    range 2000 10000
-    default 3000
-config ELEVATOR_REQUIRED_CYCLES
-    int "Percursos supervisionados por sentido para validar"
-    range 2 100
-    default 2
-config ELEVATOR_LIMITS_CONFIRMED
-    bool "Confirme tempos fisicos, sentido e protecao mecanica"
-    default n
-config ELEVATOR_SUPERVISED_TEST
-    bool "Habilitar comissionamento supervisionado pelo botao"
-    default n
-config ELEVATOR_AUTOMATIC_ENABLED
-    bool "Habilitar automatico apos calibracao NVS validada"
-    default n
-config ELEVATOR_WEB_CONTROL_ENABLED
-    bool "Permitir comando web manual da maquete (requer protecao mecanica e chave de corte independente)"
+config ELEVATOR_HOME_TIMEOUT_MS
+    int "Tempo maximo de busca HOME (ms)"
+    range 3000 60000
+    default 20000
+config ELEVATOR_CAL_TIMEOUT_MS
+    int "Tempo maximo de descida na calibracao (ms)"
+    range 3000 60000
+    default 20000
+
+config ELEVATOR_HARDWARE_VERIFIED
+    bool "Confirmo teste eletrico, parada independente e protecao mecanica"
     default n
     help
-      Habilite apenas depois de verificar fisicamente os dois fins de curso,
-      a parada eletrica dos sinais IN1/IN2 e a parada de potencia independente.
-      Sem esta confirmacao, mantenha o modo desabilitado.
-config ELEVATOR_WEB_HEARTBEAT_TIMEOUT_MS
-    int "Limite sem comandos web antes da parada (ms)"
-    range 300 1000
-    default 600
-endmenu
+      Nunca marcar sem verificar o comando fisico IN1=IN2=LOW em falha,
+      o sensor HOME NC e a capacidade de interromper energia do motor
+      independentemente do ESP32. Esta opcao nao fornece protecao fisica.
 
-menu "Conectividade"
+menu "Wi-Fi local"
 config ELEVATOR_AP_SSID
-    string "SSID SoftAP"
+    string "Nome do ponto de acesso"
     default "Elevador"
 config ELEVATOR_AP_PASSWORD
-    string "Senha WPA2 (8 a 63 caracteres)"
+    string "Senha WPA2 (minimo 8 caracteres; troque antes de habilitar motor)"
     default "12345678"
 config ELEVATOR_AP_MAX_CLIENTS
-    int "Maximo de clientes"
+    int "Maximo de dispositivos conectados"
     range 1 4
-    default 4
-config ELEVATOR_WEB_REFRESH_MS
-    int "Atualizacao web (ms)"
-    range 250 500
-    default 350
+    default 2
 endmenu
 endmenu
