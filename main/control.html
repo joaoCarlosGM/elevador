@@ -115,7 +115,7 @@ const names={UNKNOWN:'POSIÇÃO DESCONHECIDA',HOME:'NO HOME',CAL_READY:'CALIBRA�
 const ui={ready:false,busy:false,state:'UNKNOWN',online:false,settingsLoaded:false,settings:{up_in1_high:1,home_active_level:1}};
 const time=ms=>ms>0?(ms/1000).toFixed(2)+' s':'—';
 function hint(message){$('message').textContent=message;}
-function enable(id,on){$(id).disabled=!on||ui.busy;}
+function enable(id,on){$(id).disabled=!on||(id!=='stop'&&ui.busy);}
 function display(s){
  if(!s||!Object.hasOwn(names,s.state)||!s.settings||!Number.isFinite(s.min_ms))throw Error('Telemetria inválida');
  ui.state=s.state;ui.ready=!!s.ready;ui.online=true;
@@ -159,8 +159,9 @@ function offline(message){
  $('progress').style.width='0%';$('home-indicator').textContent='HOME ?';
 }
 async function send(path,body){
- if(ui.busy||!ui.online)return;
- ui.busy=true;
+ const isStop=path==='/api/stop';
+ if((ui.busy&&!isStop)||!ui.online)return;
+ if(!isStop)ui.busy=true;
  try{
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2000);
   let response;
@@ -174,7 +175,7 @@ async function send(path,body){
   hint('Comando aceito. Aguardando confirmação de estado…');
   if(path==='/api/settings')ui.settingsLoaded=false;
  }catch(e){hint('Comando recusado: '+e.message);}
- finally{ui.busy=false;}
+ finally{if(!isStop)ui.busy=false;}
 }
 for(const [id,action] of [['home','home'],['up','up'],['down','down'],
  ['stop','stop'],['calibrate','calibrate'],['set-min','set-min']]){
