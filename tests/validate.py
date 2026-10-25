@@ -139,6 +139,15 @@ int main(void){
     assert(ctl.settings.minimum_ms>=2600);
     puts("PASS: SET MIN stores timed lower limit and returns to HOME");
 
+    puts("TEST PARAR during pending NVS save cancels automatic HOME");
+    begin_calibration();advance(900);command(R_SET_MIN);
+    assert(ctl.state==SAVE_MIN&&ctl.save_pending);
+    command(R_STOP);
+    assert(ctl.state==UNKNOWN&&!ctl.save_go_home&&ctl.cancel_auto_home);
+    simulate_saved_min();advance(600);
+    assert(ctl.state==UNKNOWN&&!ctl.motor_on);
+    puts("PASS: STOP prevents post-save restart");
+
     puts("TEST normal descent then ten-second auto home");
     advance(500);command(R_DOWN);
     assert(ctl.state==DOWN&&ctl.motor_on);
