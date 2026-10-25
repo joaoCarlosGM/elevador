@@ -214,6 +214,12 @@ with tempfile.TemporaryDirectory(prefix="elevador-v2-") as tmp:
     source=Path(tmp)/"host_test.c"
     binary=Path(tmp)/"host_test"
     source.write_text(HARNESS,encoding="utf-8")
+    match=re.search(r"<script>\\s*([\\s\\S]*?)</script>",HTML)
+    assert match, "Inline UI script missing"
+    ui_script=Path(tmp)/"web_ui.js"
+    ui_script.write_text(match.group(1),encoding="utf-8")
+    subprocess.run(["node","--check",str(ui_script)],check=True)
+    print("PASS inline JavaScript syntax")
     compile_cmd=["gcc","-std=gnu11","-Wall","-Wextra","-Werror",
                  "-Wno-unused-function","-Wno-unused-variable",
                  "-fsanitize=address,undefined","-fno-omit-frame-pointer",
