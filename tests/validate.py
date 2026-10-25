@@ -22,6 +22,9 @@ assert all('.uri="/api/'+action+'"' in SOURCE for action in
 assert SOURCE.count("HTTP_POST") == 8
 assert "origin_ok" in SOURCE and "GPIO_PULLUP_ENABLE" in SOURCE
 assert "RETURN_WAIT_MS 10000u" in SOURCE
+assert "begin_home(true)" in SOURCE
+assert "ctl.seek_home_until_switch=seek_switch" in SOURCE
+assert "return-countdown" in HTML
 assert "GPIO_INTR_ANYEDGE" in SOURCE and "gpio_isr_handler_add(PIN_TOP,home_gpio_isr,NULL)" in SOURCE
 assert 'nvs_set_u32(nvs,"last_home_ms",home_ms)' in SOURCE
 assert "home_time_save_pending" in SOURCE and "last_home_ms" in HTML
@@ -158,17 +161,29 @@ int main(void){
     advance(1200);
     assert(ctl.state==MIN_IDLE&&!ctl.motor_on);
     assert(pin_level[3]==0&&pin_level[4]==0);
-    advance(12000);
+    uint32_t elapsed_wait=ctl.now_ms-ctl.at_min_ms;
+    assert(elapsed_wait<RETURN_WAIT_MS-10);
+    advance(RETURN_WAIT_MS-elapsed_wait-10);
     assert(ctl.state==MIN_IDLE&&!ctl.motor_on);
-    puts("PASS: down works without calibration, stops at time, no auto return");
+    advance(10);
+    assert(ctl.state==HOMING&&ctl.motor_on&&ctl.seek_home_until_switch);
+    /* Automatic HOME search must not stop at the manual up-time setting. */
+    advance(3500);
+    assert(ctl.state==HOMING&&ctl.motor_on&&pin_level[3]==1);
+    reached_home();
+    assert(ctl.state==HOME_IDLE&&!ctl.seek_home_until_switch);
+    puts("PASS: timed descent, 10-second idle, seek HOME until switch");
 
     puts("TEST manual timed ascent from bottom");
+    start_at(true);ctl.down_time_ms=1200;
+    command(R_DOWN);pin_level[10]=0;home_gpio_isr(NULL);advance(1300);
+    assert(ctl.state==MIN_IDLE);
     ctl.up_time_ms=1800;
     command(R_UP);
-    assert(ctl.state==HOMING&&ctl.motor_on);
+    assert(ctl.state==HOMING&&ctl.motor_on&&!ctl.seek_home_until_switch);
     advance(400);reached_home();
     assert(ctl.state==HOME_IDLE);
-    puts("PASS: ascent stops when HOME triggers before timer");
+    puts("PASS: manual ascent stops when HOME triggers before timer");
 
     puts("TEST timed ascent ends safely when HOME absent");
     start_at(false);ctl.up_time_ms=1000;
@@ -187,6 +202,27 @@ int main(void){
     advance(5000);
     assert(ctl.state==UNKNOWN&&!ctl.motor_on);
     puts("PASS: immediate STOP");
+
+    puts("TEST PARAR during 10-second dwell cancels automatic return");
+    start_at(true);ctl.down_time_ms=800;command(R_DOWN);
+    pin_level[10]=0;home_gpio_isr(NULL);advance(900);
+    assert(ctl.state==MIN_IDLE&&!ctl.motor_on);
+    command(R_STOP);
+    assert(ctl.state==UNKNOWN&&!ctl.motor_on);
+    advance(11000);
+    assert(ctl.state==UNKNOWN&&!ctl.motor_on);
+    puts("PASS: STOP cancels pending automatic movement");
+
+    puts("TEST automatic HOME search has finite watchdog");
+    start_at(true);ctl.down_time_ms=800;command(R_DOWN);
+    pin_level[10]=0;home_gpio_isr(NULL);advance(900);
+    assert(ctl.state==MIN_IDLE);
+    advance(RETURN_WAIT_MS-(ctl.now_ms-ctl.at_min_ms));
+    assert(ctl.state==HOMING&&ctl.motor_on&&ctl.seek_home_until_switch);
+    advance(MAX_HOME_MS+10);
+    assert(ctl.state==FAULT&&!ctl.motor_on);
+    assert(!strcmp(ctl.reason,"HOME_TIMEOUT"));
+    puts("PASS: automatic search stops on HOME timeout");
 
     puts("TEST HOME sensor bounce rejects confirmation");
     start_at(false);command(R_HOME);advance(200);
