@@ -22,6 +22,11 @@ assert all('.uri="/api/'+action+'"' in SOURCE for action in
 assert SOURCE.count("HTTP_POST") == 7
 assert "origin_ok" in SOURCE and "GPIO_PULLUP_ENABLE" in SOURCE
 assert "RETURN_WAIT_MS 10000u" in SOURCE
+assert "GPIO_INTR_ANYEDGE" in SOURCE and "gpio_isr_handler_add(PIN_TOP,home_gpio_isr,NULL)" in SOURCE
+assert 'nvs_set_u32(nvs,"last_home_ms",home_ms)' in SOURCE
+assert "home_time_save_pending" in SOURCE and "last_home_ms" in HTML
+assert "enable('up',ready&&['UNKNOWN','MIN','CAL_READY']" in HTML
+assert "enable('down',ready&&s.top_active" in HTML
 assert "nvs_set_blob(nvs,SETTINGS_KEY" in SOURCE
 assert all('id="'+id+'"' in HTML for id in
            ("up","down","stop","home","calibrate","set-min","direction","polarity","save-settings"))
@@ -33,6 +38,7 @@ print("PASS architecture: one HOME input, timed minimum, 8 API routes, NVS contr
 
 HARNESS=r"""
 #define ELEVATOR_HOST_TEST
+#define IRAM_ATTR
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -50,6 +56,8 @@ typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(m) ((void)(m))
 #define portEXIT_CRITICAL(m) ((void)(m))
+#define portENTER_CRITICAL_ISR(m) ((void)(m))
+#define portEXIT_CRITICAL_ISR(m) ((void)(m))
 static unsigned sim_now;
 static int pin_level[22],fail_pin=-1,first_powerup_moves;
 static int64_t esp_timer_get_time(void){return (int64_t)sim_now*1000;}
@@ -79,6 +87,7 @@ static void advance(unsigned ms) {
 static void start_at(bool top) {
     memset(&ctl,0,sizeof(ctl));memset(pin_level,0,sizeof(pin_level));
     sim_now=0;fail_pin=-1;first_powerup_moves=0;
+    home_irq_edges=0;home_irq_at_ms=0;
     pin_level[10]=top?1:0;
     ctl=(controller_t){.state=UNKNOWN,.settings=defaults(),.hardware_ok=true,
         .nvs_ok=true,.wifi_ok=true,.config_verified=true};
@@ -113,10 +122,13 @@ static void simulate_saved_min(void) {
     ctl.state=UNKNOWN;ctl.top_seen=false;ctl.request=R_NONE;
 }
 static void reached_home(void){
-    pin_level[10]=1;advance(10);
+    uint32_t edge_ms=sim_now;
+    pin_level[10]=1;home_gpio_isr(NULL);advance(10);
     assert(!ctl.motor_on);
     advance(100);
     assert(ctl.state==HOME_IDLE&&!ctl.fault_latched);
+    assert(ctl.last_home_ms==edge_ms-ctl.started_ms);
+    assert(ctl.home_time_save_pending);
 }
 int main(void){
     puts("TEST no movement at boot, top NC HIGH");
@@ -129,7 +141,15 @@ int main(void){
     assert(ctl.state==HOMING&&ctl.motor_on&&pin_level[3]==1&&pin_level[4]==0);
     advance(800);reached_home();
     assert(ctl.travel_elapsed_ms==0);
-    puts("PASS: HOME stops at raw limit and verifies debounce");
+    puts("PASS: interrupt captures edge timestamp, HOME stops and verifies debounce");
+
+    puts("TEST bouncing HOME edge does not confirm HOME");
+    start_at(false);command(R_HOME);advance(200);
+    pin_level[10]=1;home_gpio_isr(NULL);advance(10);
+    pin_level[10]=0;home_gpio_isr(NULL);advance(200);
+    assert(ctl.state==FAULT&&!ctl.motor_on);
+    assert(!strcmp(ctl.reason,"HOME_SIGNAL_UNSTABLE"));
+    puts("PASS: bouncing edge latches fault instead of enabling motion");
 
     puts("TEST time-defined bottom calibration and NVS staging");
     begin_calibration();advance(2650);
