@@ -565,7 +565,7 @@ static void wifi_events(void *arg,esp_event_base_t base,int32_t event,void *data
     if (event==WIFI_EVENT_AP_STOP||event==WIFI_EVENT_AP_STADISCONNECTED) {
         portENTER_CRITICAL(&mux);
         if (event==WIFI_EVENT_AP_STOP)ctl.wifi_ok=false;
-        if (ctl.motor_on||ctl.state==CAL_READY)ctl.request=R_STOP;
+        if (ctl.motor_on||ctl.state==CAL_READY||ctl.state==MIN_IDLE)ctl.request=R_STOP;
         portEXIT_CRITICAL(&mux);
     }
 }
