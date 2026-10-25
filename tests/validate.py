@@ -84,7 +84,12 @@ static void start_at(bool top) {
     assert(ctl.state==(top?HOME_IDLE:UNKNOWN));
     assert(!ctl.motor_on);
 }
-static void command(request_t r){ctl.request=r;advance(10);}
+static void command(request_t r){
+    ctl.request=r;
+    if(r!=R_STOP&&(uint32_t)(sim_now-ctl.last_brake_ms)<REVERSE_MS) {
+        advance(REVERSE_MS+PERIOD_MS);
+    } else advance(10);
+}
 static void begin_calibration(void) {
     start_at(true);
     command(R_BEGIN_CAL);assert(ctl.state==CAL_READY);
