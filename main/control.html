@@ -4,201 +4,203 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Controle do elevador • ESP32-C3</title>
+<title>Elevador · Controle</title>
 <style>
-:root{font:16px system-ui,Segoe UI,sans-serif;color:#e9f3fc;background:#09111c;--card:#142236;--border:#30445d;--green:#83ebbb;--red:#ff9d9d;--amber:#ffda8b}
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#07121e;color:#e9f3ff;--sub:#aabdd0;--edge:#314965;--green:#4fe2ae;--blue:#58b7fb;--red:#ff9b9b;--yellow:#ffdb92}
 *{box-sizing:border-box}
-body{margin:0;min-height:100dvh;background:radial-gradient(ellipse at 10% 0%,#19324b 0,transparent 48%),#09111c}
-main{width:min(100%,780px);margin:auto;padding:24px 16px 36px}
-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;margin-bottom:24px}
-h1{font-size:1.5rem;letter-spacing:-.025em;margin:4px 0}
-h2{font-size:1rem;margin:0 0 12px}p{line-height:1.5;margin:9px 0}
-a{color:#9ddbf8}small,.muted{color:#aabcce}
-.eyebrow{letter-spacing:.14em;font-size:.7rem;font-weight:700;color:#91acc6}
-.chip{font-size:.76rem;border:1px solid #4d6680;border-radius:100px;padding:8px 12px;white-space:nowrap}
-.card{background:#142236dd;border:1px solid var(--border);border-radius:20px;padding:22px;margin-bottom:16px}
-.status{font-size:1.5rem;font-weight:750;line-height:1.2;overflow-wrap:anywhere}
-.status.fault{color:var(--red)}.status.good{color:var(--green)}
-.flow{display:grid;grid-template-columns:220px minmax(0,1fr);gap:24px;align-items:center}
-.shaft{height:260px;width:164px;border:2px solid #627a91;border-radius:12px;margin:auto;position:relative;background:repeating-linear-gradient(0deg,#111d2b 0,#111d2b 47px,#263951 48px)}
-.cabin{position:absolute;bottom:10px;left:14px;right:14px;height:62px;border:2px solid #9cb7d0;border-radius:8px;display:grid;place-items:center;background:#294d69;font-size:.74rem;font-weight:700;transition:bottom .35s linear}
-.cabin.moving{border-color:var(--green);box-shadow:0 0 24px #83ebbb35}
-.actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
-button{background:#244b66;border:1px solid #6993b0;color:white;border-radius:14px;padding:17px 8px;min-height:78px;font:700 1.09rem system-ui;cursor:pointer;touch-action:manipulation}
-button.stop{grid-column:1/-1;background:#512c34;border-color:#a66d77}
-button:disabled{cursor:not-allowed;opacity:.45}button:focus-visible{outline:3px solid var(--green);outline-offset:3px}
-.note{border-left:3px solid var(--amber);padding:10px 12px;background:#2e2c2d;border-radius:0 8px 8px 0;font-size:.85rem;color:#f5dab2}
-.sensors{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.sensor{background:#101c2d;border:1px solid #41566f;padding:12px;border-radius:12px}
-.sensor.on{border-color:var(--green);box-shadow:inset 0 0 12px #83ebbb23}
-.sensor b{display:block;font-size:.92rem}
-.sensor small{display:block;margin-top:6px}
-footer{margin-top:20px;font-size:.83rem;line-height:1.6;color:#aabcce}
-@media(max-width:590px){.flow{grid-template-columns:1fr;gap:12px}.shaft{height:210px}.sensors{grid-template-columns:1fr 1fr}.card{padding:17px}main{padding:16px 12px}button{min-height:70px}}
-@media(prefers-reduced-motion:reduce){.cabin{transition:none!important}}
+body{margin:0;background:radial-gradient(ellipse at 55% -10%,#1c3c5e 0,transparent 52%),#07121e;min-height:100dvh}
+main{max-width:860px;margin:auto;padding:24px 16px 50px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:22px}
+h1{margin:3px 0;font-size:1.62rem;letter-spacing:-.03em}h2{font-size:1.06rem;margin:0 0 14px}
+.kicker{font-size:.7rem;letter-spacing:.15em;color:#8ba9c6;font-weight:800}
+small,.muted{color:var(--sub)}
+p{line-height:1.5}
+.card{background:#122238ee;border:1px solid var(--edge);border-radius:20px;padding:22px;margin-bottom:17px}
+.chip{padding:8px 11px;border:1px solid #4d6884;border-radius:100px;font-size:.76rem;white-space:nowrap}
+.chip.good{color:var(--green);border-color:#367f69}.chip.error{color:var(--red);border-color:#a65059}
+.readout{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+#state{font-weight:800;font-size:1.54rem;overflow-wrap:anywhere}#state.error{color:var(--red)}
+.gauge{height:9px;background:#273e54;border-radius:100px;overflow:hidden;margin:18px 0 10px}
+#progress{width:0;height:100%;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .24s}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.metric{background:#0d1b2a;border:1px solid #354a60;border-radius:13px;padding:12px;min-height:78px}
+.metric small{display:block;font-size:.72rem;margin-bottom:7px}
+.metric b{font-size:1.15rem;overflow-wrap:anywhere}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+button,select{font:inherit}
+button{cursor:pointer;min-height:72px;border-radius:15px;border:1px solid #4f7296;background:#20415e;color:#eaf6ff;font-weight:800;font-size:1.05rem;padding:13px 12px;transition:transform .12s}
+button:active:not(:disabled){transform:scale(.985)}
+button:focus-visible,select:focus-visible{outline:3px solid #82e2bb;outline-offset:3px}
+button:disabled{opacity:.40;cursor:not-allowed}
+button.up{background:#164e42;border-color:#277d68}
+button.down{background:#1b4672;border-color:#346fac}
+button.stop{grid-column:1/-1;background:#6b2730;border-color:#b05e69;min-height:68px}
+button.secondary{background:#1b3048;font-size:.92rem;min-height:59px}
+button.save{background:#73521d;border-color:#ae8748;color:#fff0cf}
+.tag{display:inline-block;padding:5px 9px;border-radius:8px;background:#18364a;font-size:.79rem;color:#cde9ff}
+.note{font-size:.83rem;color:#f3d9ae;border-left:3px solid #b9904d;background:#342d25;padding:10px 12px;border-radius:0 8px 8px 0;line-height:1.45;margin-top:16px}
+.field{display:grid;gap:8px;margin:14px 0}
+.field label{font-size:.88rem;font-weight:700}
+select{padding:13px 10px;color:#eaf6ff;border:1px solid #527092;border-radius:11px;background:#0b1a2c;min-height:48px;width:100%}
+details{margin-bottom:15px}summary{cursor:pointer;font-weight:700;font-size:1.02rem;padding:5px 0}
+#message{min-height:24px;font-size:.88rem;color:var(--yellow)}
+footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
+@media(max-width:510px){main{padding:16px 12px 35px}.card{padding:16px;border-radius:16px}h1{font-size:1.34rem}.grid{gap:6px}.metric{padding:9px}.metric b{font-size:.98rem}.actions{gap:9px}button{font-size:1rem;min-height:77px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
 <main>
 <header>
-<div><div class="eyebrow">ESP32-C3 · L293D</div><h1>Controle do elevador</h1><small>Rede local: Elevador</small></div>
-<span class="chip" id="connection" role="status" aria-live="polite">SEM TELEMETRIA</span>
+<div><div class="kicker">ESP32-C3 · CONTROLE DA MAQUETE</div><h1>Elevador</h1></div>
+<div class="chip" id="connection">CONECTANDO</div>
 </header>
-<section class="card" aria-labelledby="heading-status">
-<h2 id="heading-status">Estado atual</h2>
-<div class="status" id="status" role="status">Aguardando o dispositivo</div>
-<p id="details" class="muted">Os comandos físicos permanecem bloqueados enquanto os sensores e a calibração não forem validados.</p>
-<div class="flow">
-<div class="shaft" aria-label="Representação ilustrativa da posição, sem encoder"><div id="cabin" class="cabin">SEM DADOS</div></div>
-<div>
-<h2>Subida e descida</h2>
-<div class="actions">
-<button id="up" type="button" disabled>↑ SUBIR</button>
-<button id="down" type="button" disabled>↓ DESCER</button>
-<button id="stop" type="button" class="stop" disabled>■ PARAR</button>
+<section class="card">
+<h2>Posição do elevador</h2>
+<div class="readout">
+<div><div id="state" role="status">Sem telemetria</div><small id="description">Aguardando informações do ESP32…</small></div>
+<div class="tag" id="home-indicator">HOME ?</div>
 </div>
-<div id="mode" class="note">Comandos indisponíveis: o firmware ainda não implementa acionamento remoto seguro.</div>
-</div>
+<div class="gauge" role="progressbar" aria-label="Posição estimada" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="gauge"><div id="progress"></div></div>
+<div class="grid">
+<div class="metric"><small>Tempo mínimo</small><b id="minimum">—</b></div>
+<div class="metric"><small>Descida atual</small><b id="elapsed">—</b></div>
+<div class="metric"><small>Retorno auto.</small><b id="countdown">—</b></div>
 </div>
 </section>
-<section class="card" aria-labelledby="heading-ends">
-<h2 id="heading-ends">Sensores e movimento</h2>
-<div class="sensors">
-<div id="top" class="sensor"><b>Fim superior</b><small>—</small></div>
-<div id="bottom" class="sensor"><b>Fim inferior</b><small>—</small></div>
-<div id="motor" class="sensor"><b>Motor</b><small>—</small></div>
+<section class="card">
+<h2>Controle</h2>
+<div class="actions">
+<button type="button" class="up" id="up" disabled>↑ SUBIR</button>
+<button type="button" class="down" id="down" disabled>↓ DESCER</button>
+<button type="button" class="stop" id="stop" disabled>■ PARAR</button>
+<button type="button" class="secondary" id="home" disabled>⌂ ENCONTRAR HOME</button>
+<button type="button" class="secondary" id="calibrate" disabled>⚙ CALIBRAR MÍNIMO</button>
 </div>
-<p id="updated" class="muted">Última leitura: —</p>
+<div class="note" id="help">Primeiro encontre HOME no sensor superior. Não há sensor inferior: o mínimo é uma posição estimada por tempo.</div>
+</section>
+<section class="card">
+<h2>Gravar posição inferior</h2>
+<p class="muted">1. Vá para HOME. 2. Toque em CALIBRAR MÍNIMO. 3. Toque em DESCER. 4. Ao chegar ao ponto desejado, toque em SET MÍNIMO.</p>
+<button type="button" class="save" id="set-min" style="width:100%;min-height:76px" disabled>✓ SET MÍNIMO · SALVAR</button>
+<p class="muted" style="font-size:.83rem">Ao salvar, o motor para e o elevador volta automaticamente ao HOME. Quando atinge o mínimo no modo normal, retorna ao HOME após 10 segundos.</p>
+</section>
+<section class="card">
+<details>
+<summary>Configurações salvas no ESP32</summary>
+<p class="muted" style="font-size:.84rem">Modificar o sentido ou a polaridade invalida o mínimo gravado. Só é permitido salvar sem movimento. Depois, encontre HOME e calibre novamente.</p>
+<div class="field"><label for="direction">Sentido de rotação para SUBIR</label>
+<select id="direction">
+<option value="1">GPIO3 = HIGH · GPIO4 = LOW</option>
+<option value="0">GPIO3 = LOW · GPIO4 = HIGH (invertido)</option>
+</select></div>
+<div class="field"><label for="polarity">Sensor superior HOME</label>
+<select id="polarity">
+<option value="1">Ativo HIGH · NC para GND (padrão)</option>
+<option value="0">Ativo LOW · NO para GND</option>
+</select></div>
+<button type="button" id="save-settings" class="secondary" style="width:100%" disabled>Salvar configurações na memória</button>
+</details>
+<div id="message" role="status"></div>
 </section>
 <footer>
-<a href="/dashboard">Abrir dashboard de diagnóstico</a>
-<p>Segure SUBIR ou DESCER para mover. Soltar envia PARAR; a perda de comunicação também faz o firmware solicitar frenagem. O STOP é lógico: não desliga a potência do L293D. Falha de fim de curso, posição desconhecida ou parada durante um percurso exigem diagnóstico antes de rearmar. Nunca use em elevadores para pessoas.</p>
+<p>Wi-Fi local: <strong>Elevador</strong> · Acesso: <strong>http://192.168.4.1/</strong>. Interface única, sem internet.</p>
+<p>**Atenção:** comandos web fazem o motor se mover de verdade após habilitação de segurança no firmware. O botão PARAR solicita frenagem IN1=IN2=0, mas não desliga a potência independentemente. Com um só fim de curso, o limite inferior por tempo pode derivar devido à carga, à alimentação ou ao travamento do motor. Use proteção mecânica e desligamento independente.</p>
 </footer>
 </main>
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
-const isDemo=location.protocol==='file:';
-const states={BOOT:'INICIALIZANDO',NEEDS_COMMISSIONING:'CALIBRAÇÃO PENDENTE',IDLE_TOP:'NO TOPO',IDLE_BOTTOM:'NA BASE',WAIT_AUTO_UP:'AGUARDANDO SUBIDA',MOVING_UP:'SUBINDO',MOVING_DOWN:'DESCENDO',FAULT:'FALHA — MOVIMENTO BLOQUEADO'};
-let demoAction='BOTTOM',demoAt=Date.now();
-let online=false,remoteReady=false,activeHold=null,inFlight=false,heartbeat=null;
-async function command(action){
- if(isDemo)return true;
- const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),900);
+const names={UNKNOWN:'POSIÇÃO DESCONHECIDA',HOME:'NO HOME',CAL_READY:'CALIBRAÇÃO PRONTA',HOMING:'SUBINDO PARA HOME',HOME_VERIFY:'VERIFICANDO HOME',CAL_DOWN:'CALIBRANDO DESCIDA',SAVING_MIN:'GRAVANDO MÍNIMO',DOWN:'DESCENDO',MIN:'NO MÍNIMO',FAULT:'FALHA — MOTOR BLOQUEADO'};
+const ui={ready:false,busy:false,state:'UNKNOWN',online:false,settingsLoaded:false,settings:{up_in1_high:1,home_active_level:1}};
+const time=ms=>ms>0?(ms/1000).toFixed(2)+' s':'—';
+function hint(message){$('message').textContent=message;}
+function enable(id,on){$(id).disabled=!on||ui.busy;}
+function display(s){
+ if(!s||!Object.hasOwn(names,s.state)||!s.settings||!Number.isFinite(s.min_ms))throw Error('Telemetria inválida');
+ ui.state=s.state;ui.ready=!!s.ready;ui.online=true;
+ $('connection').textContent=s.ready?'CONECTADO':'BLOQUEADO';
+ $('connection').className='chip '+(s.ready?'good':'error');
+ $('state').textContent=names[s.state];
+ $('state').className=s.state==='FAULT'?'error':'';
+ $('description').textContent=s.fault?('Motivo: '+s.fault):s.ready?'Controle disponível':'Verifique as proteções físicas, o menuconfig e a senha do AP';
+ $('home-indicator').textContent=s.top_active?'HOME ATIVO':'HOME LIVRE';
+ $('minimum').textContent=time(s.min_ms);
+ $('elapsed').textContent=time(s.elapsed_ms);
+ $('countdown').textContent=time(s.return_wait_ms);
+ const pct=s.position_pct>=0?Math.min(100,s.position_pct):0;
+ $('progress').style.width=pct+'%';$('gauge').setAttribute('aria-valuenow',String(pct));
+ $('gauge').setAttribute('aria-valuetext',s.position_pct<0?'Posição desconhecida':pct+'% do curso estimado');
+ enable('stop',true);
+ const ready=s.ready;
+ enable('home',ready&&['UNKNOWN','MIN','HOME','CAL_READY'].includes(s.state));
+ enable('up',ready&&['UNKNOWN','MIN','HOME','CAL_READY'].includes(s.state));
+ enable('down',ready&&((s.state==='HOME'&&s.min_ms>0)||s.state==='CAL_READY'));
+ enable('calibrate',ready&&s.state==='HOME');
+ enable('set-min',ready&&s.state==='CAL_DOWN'&&s.elapsed_ms>=400);
+ enable('save-settings',s.online!==false&&['HOME','UNKNOWN','FAULT'].includes(s.state)&&!s.settings.saving);
+ if(!ui.settingsLoaded&&!s.settings.saving){
+  ui.settingsLoaded=true;
+  $('direction').value=String(s.settings.up_in1_high);
+  $('polarity').value=String(s.settings.home_active_level);
+ }
+ $('help').textContent=s.state==='CAL_READY'?'Agora toque em DESCER; quando chegar ao ponto inferior desejado, pressione SET MÍNIMO.':
+ s.state==='MIN'?'Retorno automático para HOME em 10 segundos.':
+ s.state==='SAVING_MIN'?'Gravando tempo na NVS; depois o elevador volta ao HOME.':
+ s.state==='UNKNOWN'?'Use ENCONTRAR HOME antes da descida normal ou calibração.':
+ s.state==='FAULT'?'Corte a alimentação do motor e verifique a causa.':
+ 'O HOME é determinado pelo sensor superior; a posição inferior é estimada por tempo.';
+}
+function offline(message){
+ ui.online=false;ui.ready=false;ui.state='UNKNOWN';$('connection').textContent='SEM CONEXÃO';
+ $('connection').className='chip error';$('state').textContent='SEM TELEMETRIA';
+ $('description').textContent=message;
+ for(const id of ['up','down','stop','home','calibrate','set-min','save-settings'])$(id).disabled=true;
+ $('progress').style.width='0%';$('home-indicator').textContent='HOME ?';
+}
+async function send(path,body){
+ if(ui.busy||!ui.online)return;
+ ui.busy=true;
  try{
-  const res=await fetch('/api/control/'+action.toLowerCase(),{method:'POST',cache:'no-store',signal:controller.signal});
-  if(!res.ok)throw Error('HTTP '+res.status);
-  return true;
- }catch(err){
-  $('mode').textContent='Comando não aceito: '+err.message+'. Se houver movimento, desligue a potência fisicamente.';
-  return false;
- }finally{clearTimeout(timer);}
-}
-async function sendHeartbeat(){
- if(!activeHold||inFlight||!online)return;
- inFlight=true;
- const ok=await command(activeHold);
- inFlight=false;
- if(!ok)stopHold();
-}
-function stopHold(){
- if(heartbeat!==null){clearInterval(heartbeat);heartbeat=null;}
- if(!activeHold)return;
- activeHold=null;
- if(!isDemo)void command('STOP');
-}
-function beginHold(action){
- if(isDemo)return;
- if(activeHold||!remoteReady||!online)return;
- activeHold=action;
- void sendHeartbeat();
- heartbeat=setInterval(sendHeartbeat,180);
-}
-function demo(){
- const elapsed=Date.now()-demoAt;
- if(demoAction==='UP'&&elapsed>=4500)demoAction='TOP';
- if(demoAction==='DOWN'&&elapsed>=4500)demoAction='BOTTOM';
- const going=demoAction==='UP'||demoAction==='DOWN';
- return {state:going?(demoAction==='UP'?'MOVING_UP':'MOVING_DOWN'):(demoAction==='TOP'?'IDLE_TOP':'IDLE_BOTTOM'),position:going?'UNKNOWN':demoAction,
- motion:going?demoAction:'STOPPED',travel:{elapsed_ms:going?elapsed:0,minimum_up_ms:4500,minimum_down_ms:4500},
- gpio:{limit_top:{active:demoAction==='TOP'},limit_bottom:{active:demoAction==='BOTTOM'}},
- error:{code:'NONE',message:''},motor_blocked:false};
-}
-function render(data){
- if(!data||!Object.hasOwn(states,data.state)||!data.gpio||!data.travel||!data.error)throw Error('Telemetria inválida');
- const s=data.state,going=s==='MOVING_UP'||s==='MOVING_DOWN';
- const error=data.error.code&&data.error.code!=='NONE'?data.error.code+' — '+(data.error.message||'falha'):'';
- $('connection').textContent=isDemo?'DEMONSTRAÇÃO':'API CONECTADA';
- $('status').textContent=states[s];$('status').className='status '+(s==='FAULT'?'fault':s==='IDLE_TOP'||s==='IDLE_BOTTOM'?'good':'');
- $('details').textContent=error||('Posição '+(data.position==='TOP'?'superior':data.position==='BOTTOM'?'inferior':'indeterminada')+'.');
- const elapsed=Number(data.travel.elapsed_ms)||0;
- const duration=Number(s==='MOVING_UP'?data.travel.minimum_up_ms:data.travel.minimum_down_ms)||4500;
- const ratio=data.position==='TOP'?1:data.position==='BOTTOM'?0:
- going?(s==='MOVING_UP'?Math.min(.96,elapsed/duration):Math.max(.04,1-elapsed/duration)):.5;
- $('cabin').style.bottom=(10+ratio*(window.matchMedia('(max-width:590px)').matches?125:175))+'px';$('cabin').classList.toggle('moving',going);
- $('cabin').textContent=going?(s==='MOVING_UP'?'↑ SUBINDO':'↓ DESCENDO'):data.position==='TOP'?'TOPO':data.position==='BOTTOM'?'BASE':'PARADO';
- for(const [id,val] of [['top',data.gpio.limit_top?.active],['bottom',data.gpio.limit_bottom?.active]]){
-  $(id).classList.toggle('on',val===true);$(id).querySelector('small').textContent=val===true?'ACIONADO':'LIVRE';
- }
- $('motor').classList.toggle('on',going);$('motor').querySelector('small').textContent=going?'EM MOVIMENTO':'PARADO';
- $('updated').textContent='Última leitura: '+new Date().toLocaleTimeString('pt-BR')+(isDemo?' · SIMULADA':' · API REAL');
- online=true;
- remoteReady=!!data.remote?.ready && data.remote?.enabled===true && s!=='FAULT' && !data.motor_blocked;
- $('mode').textContent=isDemo?'DEMONSTRAÇÃO: os botões simulam movimentos; nenhum hardware é acionado.':
-  !data.remote?.enabled?'Controle real desligado no menuconfig. Proteções da maquete exigem verificação.':
-  s==='FAULT'?'FALHA ATIVA: comandos bloqueados; confira fins de curso e parada elétrica.':
-  remoteReady?'SEGURE o botão para mover; SOLTE para parar. Parada não corta a potência.':
-  'Movimento bloqueado: confirme a origem, os fins de curso e a configuração.';
- $('up').disabled=!isDemo&&!(remoteReady&&(data.position==='BOTTOM'||s==='MOVING_UP'));
- $('down').disabled=!isDemo&&!(remoteReady&&(data.position==='TOP'||s==='MOVING_DOWN'));
- $('stop').disabled=!isDemo&&!online;
-}
-function stale(message){
- online=false;remoteReady=false;stopHold();
- $('connection').textContent='SEM TELEMETRIA';$('status').textContent='SEM CONFIRMAÇÃO';$('status').className='status fault';
- $('details').textContent=message;$('cabin').textContent='SEM DADOS';$('cabin').classList.remove('moving');
- for(const id of ['top','bottom','motor']){$(id).classList.remove('on');$(id).querySelector('small').textContent='DESCONHECIDO';}
- for(const id of ['up','down','stop'])$(id).disabled=true;
- $('mode').textContent='Comandos bloqueados. Verifique Wi-Fi e firmware.';
-}
-for(const [id,action] of [['up','UP'],['down','DOWN'],['stop','STOP']]){
- $(id).addEventListener('click',()=>{
-  if(isDemo){demoAction=action==='STOP'?'STOP':action;demoAt=Date.now();render(demo());}
-  else if(action==='STOP'){stopHold();void command('STOP');}
- });
- if(action!=='STOP'){
-  $(id).addEventListener('pointerdown',e=>{
-   if(isDemo)return;
-   e.preventDefault();
-   try{$(id).setPointerCapture(e.pointerId);}catch(_){}
-   beginHold(action);
-  });
-  $(id).addEventListener('keydown',e=>{
-   if(!isDemo&&e.repeat===false&&(e.key===' '||e.key==='Enter')){e.preventDefault();beginHold(action);}
-  });
-  $(id).addEventListener('keyup',e=>{
-   if(!isDemo&&(e.key===' '||e.key==='Enter'))stopHold();
-  });
- }
-}
-document.addEventListener('pointerup',stopHold);
-document.addEventListener('pointercancel',stopHold);
-window.addEventListener('blur',stopHold);
-document.addEventListener('visibilitychange',()=>{if(document.hidden)stopHold();});
-window.addEventListener('pagehide',stopHold);
-async function poll(){
- if(isDemo){try{render(demo());}catch(e){stale(e.message);}}
- else{
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1400);
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2000);
+  let response;
   try{
-   const r=await fetch('/api/status',{cache:'no-store',signal:controller.signal});
-   if(!r.ok)throw Error('API HTTP '+r.status);
-   render(await r.json());
-  }catch(e){stale('Falha de comunicação com o ESP32: '+e.message);}
-  finally{clearTimeout(timeout);}
- }
+   response=await fetch(path,{method:'POST',cache:'no-store',
+    headers:body?{'Content-Type':'application/x-www-form-urlencoded'}:{},
+    body:body||undefined,signal:controller.signal});
+  }finally{clearTimeout(timer);}
+  const data=await response.json();
+  if(!response.ok||!data.accepted)throw Error(data.error||'intertravamento');
+  hint('Comando aceito. Aguardando confirmação de estado…');
+  if(path==='/api/settings')ui.settingsLoaded=false;
+ }catch(e){hint('Comando recusado: '+e.message);}
+ finally{ui.busy=false;}
+}
+for(const [id,action] of [['home','home'],['up','up'],['down','down'],
+ ['stop','stop'],['calibrate','calibrate'],['set-min','set-min']]){
+ $(id).addEventListener('click',()=>void send('/api/'+action));
+}
+$('save-settings').addEventListener('click',()=>{
+ const a=+$('direction').value,b=+$('polarity').value;
+ if(a===ui.settings.up_in1_high&&b===ui.settings.home_active_level){hint('Nenhuma mudança para salvar.');return;}
+ if(!window.confirm('Alterar os sinais invalida o mínimo gravado e exige nova busca HOME e calibração. Continuar?'))return;
+ void send('/api/settings','up_in1='+a+'&top_active='+b);
+});
+async function poll(){
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1500);
+ try{
+  const response=await fetch('/api/status',{cache:'no-store',signal:controller.signal});
+  if(!response.ok)throw Error('HTTP '+response.status);
+  const data=await response.json();display(data);
+  ui.settings=data.settings;
+ }catch(e){offline('ESP32 indisponível: '+e.message);}
+ finally{clearTimeout(timeout);}
  setTimeout(poll,350);
 }
+window.addEventListener('pagehide',()=>{
+ if(ui.state==='DOWN'||ui.state==='CAL_DOWN'||ui.state==='HOMING')
+  void fetch('/api/stop',{method:'POST',keepalive:true}).catch(()=>{});
+});
 poll();
 </script>
 </body>
