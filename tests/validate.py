@@ -25,6 +25,8 @@ assert "RETURN_WAIT_MS 10000u" in SOURCE
 assert "begin_home(true)" in SOURCE
 assert "ctl.seek_home_until_switch=seek_switch" in SOURCE
 assert "return-countdown" in HTML
+assert "ctl.state==CAL_READY||ctl.state==MIN_IDLE" in SOURCE
+assert "['DOWN','CAL_DOWN','HOMING','MIN']" in HTML
 assert "GPIO_INTR_ANYEDGE" in SOURCE and "gpio_isr_handler_add(PIN_TOP,home_gpio_isr,NULL)" in SOURCE
 assert 'nvs_set_u32(nvs,"last_home_ms",home_ms)' in SOURCE
 assert "home_time_save_pending" in SOURCE and "last_home_ms" in HTML
