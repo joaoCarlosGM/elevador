@@ -61,7 +61,7 @@ typedef struct {
     bool cancel_auto_home;
     bool hardware_ok, nvs_ok, wifi_ok, motor_on, direction_up;
     bool top_raw, top_stable, top_seen, top_released, timer_running;
-    bool fault_latched;
+    bool fault_latched, config_verified;
     bool home_edge_pending, home_time_save_pending, times_save_pending;
     char reason[40];
     uint32_t started_ms, last_brake_ms, home_verify_ms, at_min_ms;
@@ -173,7 +173,7 @@ static void update_top(void) {
 }
 static bool ready(void) {
     return ctl.hardware_ok && ctl.nvs_ok && ctl.wifi_ok &&
-        ctl.top_seen &&
+        ctl.config_verified && ctl.top_seen &&
         (uint32_t)(ctl.now_ms-ctl.top_change_ms)>=DEBOUNCE_MS &&
         !ctl.fault_latched && !ctl.save_pending && !ctl.times_save_pending && !ctl.saving;
 }
@@ -422,7 +422,7 @@ static esp_err_t status_handler(httpd_req_t *req) {
         s.settings.minimum_ms && position_known ?
           (int)((uint64_t)at*100/s.settings.minimum_ms) : -1;
     if (percent>100) percent=100;
-    bool snapshot_ready=s.hardware_ok&&s.nvs_ok&&s.wifi_ok&&
+    bool snapshot_ready=s.hardware_ok&&s.nvs_ok&&s.wifi_ok&&s.config_verified&&
         s.top_seen&&(uint32_t)(s.now_ms-s.top_change_ms)>=DEBOUNCE_MS&&
         !s.fault_latched&&!s.save_pending&&!s.times_save_pending&&!s.saving;
     int n=snprintf(buf,sizeof(buf),
@@ -650,6 +650,12 @@ void app_main(void) {
     }else fault("NVS_UNAVAILABLE");
     ctl.now_ms=clock_ms();
     if(ctl.hardware_ok&&!brake())fault("GPIO_STOP_FAILED");
+    /* Explicit verification gate: never arm a motor after unexplained runaway. */
+#ifdef CONFIG_ELEVATOR_HARDWARE_VERIFIED
+    ctl.config_verified=strcmp(CONFIG_ELEVATOR_AP_PASSWORD,"12345678")!=0;
+#else
+    ctl.config_verified=false;
+#endif
     esp_err_t web=start_wifi();
     ctl.wifi_ok=web==ESP_OK;
     if(!ctl.wifi_ok)fault("WIFI_UNAVAILABLE");
@@ -661,8 +667,8 @@ void app_main(void) {
     }
     ESP_LOGI(TAG,"AP %s; HOME GPIO%d (NC/GND), IN1 GPIO%d, IN2 GPIO%d",
         CONFIG_ELEVATOR_AP_SSID,PIN_TOP,PIN_IN1,PIN_IN2);
-    ESP_LOGI(TAG,"Tempos manuais: subir %"PRIu32" ms; descer %"PRIu32" ms",
-        ctl.up_time_ms,ctl.down_time_ms);
+    if(!ctl.config_verified)ESP_LOGW(TAG,
+        "Motor blocked: confirm hardware protection and set a non-default AP password");
     for(;;){flush_pending();vTaskDelay(pdMS_TO_TICKS(20));}
 }
 #endif
