@@ -54,7 +54,7 @@ typedef struct {
     state_t state;
     request_t request;
     settings_t settings, staged;
-    bool save_pending, saving, save_go_home;
+    bool save_pending, saving, save_go_home, auto_home_after_save;
     bool hardware_ok, nvs_ok, wifi_ok, motor_on, direction_up;
     bool top_raw, top_stable, top_seen, top_released, timer_running;
     bool fault_latched, config_verified;
@@ -141,8 +141,9 @@ static void update_top(void) {
 }
 static bool ready(void) {
     return ctl.hardware_ok && ctl.nvs_ok && ctl.wifi_ok &&
-        ctl.config_verified && !ctl.fault_latched && !ctl.save_pending &&
-        !ctl.saving;
+        ctl.config_verified && ctl.top_seen &&
+        (uint32_t)(ctl.now_ms-ctl.top_change_ms)>=DEBOUNCE_MS &&
+        !ctl.fault_latched && !ctl.save_pending && !ctl.saving;
 }
 static void begin_home(void) {
     if (ctl.top_stable && ctl.top_raw) {
@@ -220,6 +221,13 @@ static void controller_tick(void *unused) {
     default: break;
     }
     if (!ready()) { portEXIT_CRITICAL(&mux); return; }
+    /* SET MIN returns HOME after the NVS commit and the reversal dwell. */
+    if (ctl.auto_home_after_save && ctl.state==UNKNOWN &&
+        (uint32_t)(ctl.now_ms-ctl.last_brake_ms)>=REVERSE_MS) {
+        begin_home();
+        if (ctl.state==HOMING || ctl.state==HOME_IDLE)
+            ctl.auto_home_after_save=false;
+    }
     switch (r) {
     case R_HOME: case R_UP:
         if (ctl.state==UNKNOWN || ctl.state==MIN_IDLE ||
@@ -279,7 +287,9 @@ static void flush_pending(void) {
     else {
         ctl.settings=copy;
         ctl.state=UNKNOWN; ctl.travel_elapsed_ms=0;
-        if (go_home) ctl.request=R_HOME;
+        ctl.auto_home_after_save=go_home;
+        ctl.top_seen=false; /* recheck physical input with the committed polarity */
+        ctl.request=R_NONE;
     }
     portEXIT_CRITICAL(&mux);
 }
@@ -323,6 +333,9 @@ static esp_err_t status_handler(httpd_req_t *req) {
         s.settings.minimum_ms && position_known ?
           (int)((uint64_t)at*100/s.settings.minimum_ms) : -1;
     if (percent>100) percent=100;
+    bool snapshot_ready=s.hardware_ok&&s.nvs_ok&&s.wifi_ok&&s.config_verified&&
+        s.top_seen&&(uint32_t)(s.now_ms-s.top_change_ms)>=DEBOUNCE_MS&&
+        !s.fault_latched&&!s.save_pending&&!s.saving;
     int n=snprintf(buf,sizeof(buf),
         "{\"state\":\"%s\",\"fault\":\"%s\",\"top_active\":%s,"
         "\"min_ms\":%"PRIu32",\"elapsed_ms\":%"PRIu32",\"position_pct\":%d,"
@@ -335,7 +348,7 @@ static esp_err_t status_handler(httpd_req_t *req) {
         running?(s.direction_up?"UP":"DOWN"):"STOP",
         s.settings.up_in1_high,s.settings.home_active_level,
         s.saving||s.save_pending?"true":"false",
-        ready()?"true":"false",
+        snapshot_ready?"true":"false",
         s.wifi_ok?"true":"false",s.hardware_ok?"true":"false",
         s.state==CAL_DOWN||s.state==CAL_READY?"true":"false",
         s.state==MIN_IDLE && clock_ms()-s.at_min_ms<RETURN_WAIT_MS?
@@ -475,7 +488,12 @@ void app_main(void) {
     gpio_config_t in={.pin_bit_mask=1ULL<<PIN_TOP,.mode=GPIO_MODE_INPUT,
        .pull_up_en=GPIO_PULLUP_ENABLE,.intr_type=GPIO_INTR_DISABLE};
     esp_err_t d=gpio_config(&in);
-    ctl.hardware_ok=a==ESP_OK&&b==ESP_OK&&c==ESP_OK&&d==ESP_OK;
+    bool map_ok=PIN_IN1!=PIN_IN2 && PIN_IN1!=PIN_TOP && PIN_IN2!=PIN_TOP &&
+        PIN_IN1!=2 && PIN_IN1!=8 && PIN_IN1!=9 &&
+        PIN_IN2!=2 && PIN_IN2!=8 && PIN_IN2!=9 &&
+        PIN_TOP!=2 && PIN_TOP!=8 && PIN_TOP!=9 &&
+        PIN_IN1<12 && PIN_IN2<12 && PIN_TOP<12;
+    ctl.hardware_ok=map_ok&&a==ESP_OK&&b==ESP_OK&&c==ESP_OK&&d==ESP_OK;
     if(!ctl.hardware_ok){ctl.fault_latched=true;ctl.state=FAULT;
         snprintf(ctl.reason,sizeof(ctl.reason),"GPIO_SETUP_FAILED");}
     esp_err_t n=nvs_flash_init();
