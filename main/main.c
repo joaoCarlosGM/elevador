@@ -37,6 +37,9 @@
 #define SETTINGS_MAGIC 0x454C5634u
 #define SETTINGS_VERSION 4u
 #define SETTINGS_KEY "setup_v4"
+#define DEFAULT_TIMED_MS 3000u
+#define MIN_TIMED_MS 500u
+#define MAX_TIMED_MS 20000u
 
 typedef enum {
     UNKNOWN, HOME_IDLE, CAL_READY, HOMING, HOME_VERIFY, CAL_DOWN,
@@ -59,11 +62,12 @@ typedef struct {
     bool hardware_ok, nvs_ok, wifi_ok, motor_on, direction_up;
     bool top_raw, top_stable, top_seen, top_released, timer_running;
     bool fault_latched, config_verified;
-    bool home_edge_pending, home_time_save_pending;
+    bool home_edge_pending, home_time_save_pending, times_save_pending;
     char reason[40];
     uint32_t started_ms, last_brake_ms, home_verify_ms, at_min_ms;
     uint32_t top_change_ms, travel_elapsed_ms, staged_minimum_ms;
     uint32_t home_irq_seen, home_active_edge_ms, home_arrival_ms, last_home_ms;
+    uint32_t up_time_ms, down_time_ms, staged_up_ms, staged_down_ms;
     uint32_t now_ms;
 } controller_t;
 static controller_t ctl;
@@ -130,7 +134,7 @@ static void fault(const char *reason) {
 }
 static bool start_motor(bool up) {
     if (!ctl.hardware_ok || !ctl.wifi_ok || !ctl.nvs_ok || ctl.motor_on ||
-        ctl.fault_latched || ctl.save_pending || ctl.saving ||
+        ctl.fault_latched || ctl.save_pending || ctl.times_save_pending || ctl.saving ||
         (uint32_t)(ctl.now_ms-ctl.last_brake_ms)<REVERSE_MS) return false;
     if (!brake()) { fault("GPIO_STOP_FAILED"); return false; }
     int in1=(up == (ctl.settings.up_in1_high!=0)) ? 1 : 0;
@@ -171,7 +175,7 @@ static bool ready(void) {
     return ctl.hardware_ok && ctl.nvs_ok && ctl.wifi_ok &&
         ctl.config_verified && ctl.top_seen &&
         (uint32_t)(ctl.now_ms-ctl.top_change_ms)>=DEBOUNCE_MS &&
-        !ctl.fault_latched && !ctl.save_pending && !ctl.saving;
+        !ctl.fault_latched && !ctl.save_pending && !ctl.times_save_pending && !ctl.saving;
 }
 static void begin_home(void) {
     if (ctl.top_stable && ctl.top_raw) {
@@ -204,7 +208,7 @@ static void controller_tick(void *unused) {
         /* Never start on an unconfirmed initial switch value. */
         if (ctl.state==UNKNOWN && ctl.motor_on) fault("HOME_INPUT_UNSTABLE");
     }
-    if (ctl.state==FAULT || ctl.saving || ctl.save_pending) {
+    if (ctl.state==FAULT || ctl.saving || ctl.save_pending || ctl.times_save_pending) {
         portEXIT_CRITICAL(&mux); return;
     }
     if (ctl.state==UNKNOWN && ctl.top_seen &&
@@ -227,8 +231,15 @@ static void controller_tick(void *unused) {
             ctl.home_verify_ms=ctl.now_ms;
             break;
         }
-        if ((uint32_t)(ctl.now_ms-ctl.started_ms)>MAX_HOME_MS)
+        if ((uint32_t)(ctl.now_ms-ctl.started_ms)>MAX_HOME_MS) {
             fault("HOME_TIMEOUT");
+        } else if ((uint32_t)(ctl.now_ms-ctl.started_ms)>=ctl.up_time_ms) {
+            if (!brake()) fault("GPIO_STOP_FAILED");
+            else {
+                ctl.state=UNKNOWN;
+                ctl.travel_elapsed_ms=ctl.up_time_ms;
+            }
+        }
         break;
     case HOME_VERIFY:
         if (ctl.top_stable && ctl.top_raw) {
@@ -247,20 +258,19 @@ static void controller_tick(void *unused) {
         if (ctl.top_raw && ctl.top_released) { fault("HOME_RETRIGGERED"); break; }
         if (ctl.top_raw && elapsed>RELEASE_MS) { fault("HOME_NOT_RELEASED"); break; }
         uint32_t cap=ctl.state==CAL_DOWN ? MAX_CAL_MS :
-            ctl.settings.minimum_ms+DOWN_MARGIN_MS;
+            ctl.down_time_ms+DOWN_MARGIN_MS;
         if (elapsed>=cap) {
             if (ctl.state==CAL_DOWN) fault("CALIBRATION_TIMEOUT");
             else fault("DOWN_TIMEOUT");
-        } else if (ctl.state==DOWN && elapsed>=ctl.settings.minimum_ms) {
+        } else if (ctl.state==DOWN && elapsed>=ctl.down_time_ms) {
             if (!brake()) fault("GPIO_STOP_FAILED");
             else {ctl.state=MIN_IDLE; ctl.at_min_ms=ctl.now_ms;
-                  ctl.travel_elapsed_ms=ctl.settings.minimum_ms;}
+                  ctl.travel_elapsed_ms=ctl.down_time_ms;}
         }
         break;
     }
     case MIN_IDLE:
-        if ((uint32_t)(ctl.now_ms-ctl.at_min_ms)>=RETURN_WAIT_MS && ready())
-            begin_home();
+        /* Manual timed mode: remain stopped until the next user command. */
         break;
     default: break;
     }
@@ -293,8 +303,7 @@ static void controller_tick(void *unused) {
     case R_DOWN:
         if (ctl.state==CAL_READY && ctl.top_stable && ctl.top_raw) {
             if (start_motor(false)) ctl.state=CAL_DOWN;
-        } else if (ctl.state==HOME_IDLE && ctl.settings.minimum_ms &&
-                   ctl.top_stable && ctl.top_raw) {
+        } else if (ctl.state==HOME_IDLE && ctl.top_stable && ctl.top_raw) {
             if (start_motor(false)) ctl.state=DOWN;
         }
         break;
@@ -325,16 +334,30 @@ static bool save_blob(const settings_t *value) {
     return result==ESP_OK;
 }
 static void flush_pending(void) {
-    settings_t copy;bool do_save=false,go_home=false,save_home=false;
-    uint32_t home_ms=0;
+    settings_t copy;bool do_save=false,go_home=false,save_home=false,save_times=false;
+    uint32_t home_ms=0,up_ms=0,down_ms=0;
     portENTER_CRITICAL(&mux);
     if (ctl.save_pending && !ctl.saving) {
         ctl.saving=true; do_save=true; copy=ctl.staged;
         go_home=ctl.save_go_home;
+    } else if (ctl.times_save_pending && !ctl.saving && !ctl.motor_on) {
+        ctl.saving=true; save_times=true;
+        up_ms=ctl.staged_up_ms; down_ms=ctl.staged_down_ms;
     } else if (ctl.home_time_save_pending && !ctl.saving && !ctl.motor_on) {
         ctl.saving=true; save_home=true; home_ms=ctl.last_home_ms;
     }
     portEXIT_CRITICAL(&mux);
+    if (save_times) {
+        esp_err_t e=nvs_set_u32(nvs,"up_time_ms",up_ms);
+        if (e==ESP_OK) e=nvs_set_u32(nvs,"down_time_ms",down_ms);
+        if (e==ESP_OK) e=nvs_commit(nvs);
+        portENTER_CRITICAL(&mux);
+        ctl.saving=false; ctl.times_save_pending=false;
+        if (e!=ESP_OK) fault("NVS_SAVE_FAILED");
+        else {ctl.up_time_ms=up_ms; ctl.down_time_ms=down_ms;}
+        portEXIT_CRITICAL(&mux);
+        return;
+    }
     if (save_home) {
         esp_err_t e=nvs_set_u32(nvs,"last_home_ms",home_ms);
         if (e==ESP_OK) e=nvs_commit(nvs);
@@ -388,7 +411,7 @@ static bool origin_ok(httpd_req_t *req) {
 static esp_err_t status_handler(httpd_req_t *req) {
     controller_t s;
     portENTER_CRITICAL(&mux);s=ctl;portEXIT_CRITICAL(&mux);
-    char buf[760];
+    char buf[860];
     bool running=s.motor_on;
     uint32_t at=s.state==CAL_DOWN||s.state==DOWN||s.state==HOMING ?
         clock_ms()-s.started_ms : s.travel_elapsed_ms;
@@ -401,16 +424,16 @@ static esp_err_t status_handler(httpd_req_t *req) {
     if (percent>100) percent=100;
     bool snapshot_ready=s.hardware_ok&&s.nvs_ok&&s.wifi_ok&&s.config_verified&&
         s.top_seen&&(uint32_t)(s.now_ms-s.top_change_ms)>=DEBOUNCE_MS&&
-        !s.fault_latched&&!s.save_pending&&!s.saving;
+        !s.fault_latched&&!s.save_pending&&!s.times_save_pending&&!s.saving;
     int n=snprintf(buf,sizeof(buf),
         "{\"state\":\"%s\",\"fault\":\"%s\",\"top_active\":%s,"
-        "\"min_ms\":%"PRIu32",\"last_home_ms\":%"PRIu32",\"elapsed_ms\":%"PRIu32",\"position_pct\":%d,"
+        "\"min_ms\":%"PRIu32",\"last_home_ms\":%"PRIu32",\"up_ms\":%"PRIu32",\"down_ms\":%"PRIu32",\"elapsed_ms\":%"PRIu32",\"position_pct\":%d,"
         "\"motor\":\"%s\",\"settings\":{\"up_in1_high\":%u,"
         "\"home_active_level\":%u,\"saving\":%s},"
         "\"ready\":%s,\"wifi_ok\":%s,\"hardware_ok\":%s,"
         "\"calibrating\":%s,\"return_wait_ms\":%"PRIu32",\"uptime_ms\":%"PRIu32"}",
         state_name(s.state),s.reason,s.top_stable&&s.top_raw?"true":"false",
-        s.settings.minimum_ms,s.last_home_ms,at,percent,
+        s.settings.minimum_ms,s.last_home_ms,s.up_time_ms,s.down_time_ms,at,percent,
         running?(s.direction_up?"UP":"DOWN"):"STOP",
         s.settings.up_in1_high,s.settings.home_active_level,
         s.saving||s.save_pending?"true":"false",
@@ -450,7 +473,7 @@ static esp_err_t command_handler(httpd_req_t *req) {
         else if (request==R_BEGIN_CAL && st==HOME_IDLE)
             accepted=true;
         else if (request==R_DOWN &&
-            (st==CAL_READY||(st==HOME_IDLE&&ctl.settings.minimum_ms)))
+            (st==CAL_READY||st==HOME_IDLE))
             accepted=true;
         else if (request==R_SET_MIN && st==CAL_DOWN)
             accepted=true;
@@ -488,6 +511,36 @@ static esp_err_t settings_handler(httpd_req_t *req) {
         ctl.staged.checksum=settings_crc(&ctl.staged);
         ctl.save_go_home=false;ctl.cancel_auto_home=false;
         ctl.save_pending=true;accepted=true;
+    }
+    portEXIT_CRITICAL(&mux);
+    return accepted?json_resp(req,"202 Accepted","{\"accepted\":true}"):
+        json_resp(req,"409 Conflict","{\"accepted\":false,\"error\":\"busy\"}");
+}
+static esp_err_t times_handler(httpd_req_t *req) {
+    if (!origin_ok(req))
+        return json_resp(req,"403 Forbidden","{\"accepted\":false,\"error\":\"origin\"}");
+    if (req->content_len==0 || req->content_len>40)
+        return json_resp(req,"400 Bad Request","{\"accepted\":false,\"error\":\"length\"}");
+    char buf[42]={0};
+    int used=0,len=req->content_len;
+    while (used<len) {
+        int n=httpd_req_recv(req,buf+used,len-used);
+        if (n<=0) return json_resp(req,"408 Request Timeout","{\"accepted\":false}");
+        used+=n;
+    }
+    unsigned up,down; char trailing;
+    if (sscanf(buf,"up_ms=%u&down_ms=%u%c",&up,&down,&trailing)!=2 ||
+        up<MIN_TIMED_MS || up>MAX_TIMED_MS ||
+        down<MIN_TIMED_MS || down>MAX_TIMED_MS ||
+        up>MAX_HOME_MS || down>MAX_CAL_MS)
+        return json_resp(req,"400 Bad Request","{\"accepted\":false,\"error\":\"times\"}");
+    bool accepted=false;
+    portENTER_CRITICAL(&mux);
+    if (ctl.nvs_ok && !ctl.motor_on && !ctl.save_pending &&
+        !ctl.times_save_pending && !ctl.saving && ctl.state!=FAULT &&
+        (ctl.state==HOME_IDLE || ctl.state==UNKNOWN || ctl.state==MIN_IDLE)) {
+        ctl.staged_up_ms=up; ctl.staged_down_ms=down;
+        ctl.times_save_pending=true; accepted=true;
     }
     portEXIT_CRITICAL(&mux);
     return accepted?json_resp(req,"202 Accepted","{\"accepted\":true}"):
@@ -536,7 +589,8 @@ static esp_err_t start_wifi(void) {
         {.uri="/api/stop",.method=HTTP_POST,.handler=command_handler},
         {.uri="/api/calibrate",.method=HTTP_POST,.handler=command_handler},
         {.uri="/api/set-min",.method=HTTP_POST,.handler=command_handler},
-        {.uri="/api/settings",.method=HTTP_POST,.handler=settings_handler}
+        {.uri="/api/settings",.method=HTTP_POST,.handler=settings_handler},
+        {.uri="/api/times",.method=HTTP_POST,.handler=times_handler}
     };
     for (size_t i=0;i<sizeof(routes)/sizeof(routes[0]);++i) {
         e=httpd_register_uri_handler(server,&routes[i]);
@@ -545,7 +599,8 @@ static esp_err_t start_wifi(void) {
     return ESP_OK;
 }
 void app_main(void) {
-    ctl=(controller_t){.state=UNKNOWN,.settings=defaults(),.now_ms=clock_ms()};
+    ctl=(controller_t){.state=UNKNOWN,.settings=defaults(),.now_ms=clock_ms(),
+        .up_time_ms=DEFAULT_TIMED_MS,.down_time_ms=DEFAULT_TIMED_MS};
     /* Preload both latches LOW before activating pad output. */
     bool map_ok=PIN_IN1!=PIN_IN2 && PIN_IN1!=PIN_TOP && PIN_IN2!=PIN_TOP &&
         PIN_IN1!=2 && PIN_IN1!=8 && PIN_IN1!=9 &&
@@ -583,6 +638,15 @@ void app_main(void) {
         esp_err_t last=nvs_get_u32(nvs,"last_home_ms",&last_home);
         if (last==ESP_OK) ctl.last_home_ms=last_home;
         else if (last!=ESP_ERR_NVS_NOT_FOUND) fault("NVS_INVALID");
+        uint32_t up=0,down=0;
+        esp_err_t ru=nvs_get_u32(nvs,"up_time_ms",&up);
+        esp_err_t rd=nvs_get_u32(nvs,"down_time_ms",&down);
+        if (ru==ESP_OK && up>=MIN_TIMED_MS && up<=MAX_TIMED_MS && up<=MAX_HOME_MS)
+            ctl.up_time_ms=up;
+        else if (ru!=ESP_ERR_NVS_NOT_FOUND && ru!=ESP_OK) fault("NVS_INVALID");
+        if (rd==ESP_OK && down>=MIN_TIMED_MS && down<=MAX_TIMED_MS && down<=MAX_CAL_MS)
+            ctl.down_time_ms=down;
+        else if (rd!=ESP_ERR_NVS_NOT_FOUND && rd!=ESP_OK) fault("NVS_INVALID");
     }else fault("NVS_UNAVAILABLE");
     ctl.now_ms=clock_ms();
     if(ctl.hardware_ok&&!brake())fault("GPIO_STOP_FAILED");
