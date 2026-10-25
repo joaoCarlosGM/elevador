@@ -58,7 +58,7 @@ typedef struct {
     request_t request;
     settings_t settings, staged;
     bool save_pending, saving, save_go_home, auto_home_after_save;
-    bool cancel_auto_home;
+    bool cancel_auto_home, seek_home_until_switch;
     bool hardware_ok, nvs_ok, wifi_ok, motor_on, direction_up;
     bool top_raw, top_stable, top_seen, top_released, timer_running;
     bool fault_latched, config_verified;
@@ -128,6 +128,7 @@ static bool brake(void) {
 static void fault(const char *reason) {
     if (!brake()) reason="GPIO_STOP_FAILED";
     ctl.request=R_NONE;
+    ctl.seek_home_until_switch=false;
     ctl.state=FAULT;
     ctl.fault_latched=true;
     snprintf(ctl.reason,sizeof(ctl.reason),"%s",reason);
@@ -177,13 +178,17 @@ static bool ready(void) {
         (uint32_t)(ctl.now_ms-ctl.top_change_ms)>=DEBOUNCE_MS &&
         !ctl.fault_latched && !ctl.save_pending && !ctl.times_save_pending && !ctl.saving;
 }
-static void begin_home(void) {
+static void begin_home(bool seek_switch) {
     if (ctl.top_stable && ctl.top_raw) {
         if (!brake()) { fault("GPIO_STOP_FAILED"); return; }
+        ctl.seek_home_until_switch=false;
         ctl.state=HOME_IDLE; ctl.travel_elapsed_ms=0;
         return;
     }
-    if (start_motor(true)) ctl.state=HOMING;
+    if (start_motor(true)) {
+        ctl.seek_home_until_switch=seek_switch;
+        ctl.state=HOMING;
+    }
 }
 static void controller_tick(void *unused) {
     (void)unused;
@@ -196,6 +201,7 @@ static void controller_tick(void *unused) {
         bool known_home=(ctl.state==HOME_IDLE||ctl.state==CAL_READY) &&
             ctl.top_stable && ctl.top_raw;
         ctl.auto_home_after_save=false;
+        ctl.seek_home_until_switch=false;
         ctl.save_go_home=false; ctl.cancel_auto_home=true;
         if (!brake()) fault("GPIO_STOP_FAILED");
         else if (ctl.state!=FAULT) {
@@ -233,7 +239,8 @@ static void controller_tick(void *unused) {
         }
         if ((uint32_t)(ctl.now_ms-ctl.started_ms)>MAX_HOME_MS) {
             fault("HOME_TIMEOUT");
-        } else if ((uint32_t)(ctl.now_ms-ctl.started_ms)>=ctl.up_time_ms) {
+        } else if (!ctl.seek_home_until_switch &&
+                   (uint32_t)(ctl.now_ms-ctl.started_ms)>=ctl.up_time_ms) {
             if (!brake()) fault("GPIO_STOP_FAILED");
             else {
                 ctl.state=UNKNOWN;
@@ -244,6 +251,7 @@ static void controller_tick(void *unused) {
     case HOME_VERIFY:
         if (ctl.top_stable && ctl.top_raw) {
             ctl.state=HOME_IDLE; ctl.travel_elapsed_ms=0;
+            ctl.seek_home_until_switch=false;
             /* Measured ascent never overwrites calibrated descent time. */
             ctl.last_home_ms=ctl.home_arrival_ms-ctl.started_ms;
             ctl.home_time_save_pending=true;
@@ -270,7 +278,12 @@ static void controller_tick(void *unused) {
         break;
     }
     case MIN_IDLE:
-        /* Manual timed mode: remain stopped until the next user command. */
+        /* The virtual lower limit is the configured descent time. Stop there,
+         * dwell for 10 seconds, then seek the physical upper HOME switch.
+         * A user STOP during the dwell changes state to UNKNOWN, cancelling
+         * this automatic return; the HOME watchdog remains in effect. */
+        if ((uint32_t)(ctl.now_ms-ctl.at_min_ms)>=RETURN_WAIT_MS && ready())
+            begin_home(true);
         break;
     default: break;
     }
@@ -285,14 +298,15 @@ static void controller_tick(void *unused) {
     /* SET MIN returns HOME after the NVS commit and the reversal dwell. */
     if (ctl.auto_home_after_save && ctl.state==UNKNOWN &&
         (uint32_t)(ctl.now_ms-ctl.last_brake_ms)>=REVERSE_MS) {
-        begin_home();
+        begin_home(true);
         if (ctl.state==HOMING || ctl.state==HOME_IDLE)
             ctl.auto_home_after_save=false;
     }
     switch (r) {
     case R_HOME: case R_UP:
         if (ctl.state==UNKNOWN || ctl.state==MIN_IDLE ||
-            ctl.state==HOME_IDLE || ctl.state==CAL_READY) begin_home();
+            ctl.state==HOME_IDLE || ctl.state==CAL_READY)
+            begin_home(r==R_HOME);
         break;
     case R_BEGIN_CAL:
         if (ctl.state==HOME_IDLE && ctl.top_stable && ctl.top_raw) {
