@@ -1,234 +1,78 @@
-<!doctype html>
-<html lang="pt-BR">
+<!DOCTYPE html>
+<html lang="pt-br">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
-<title>Elevador · Controle</title>
-<style>
-:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#07121e;color:#e9f3ff;--sub:#aabdd0;--edge:#314965;--green:#4fe2ae;--blue:#58b7fb;--red:#ff9b9b;--yellow:#ffdb92}
-*{box-sizing:border-box}
-body{margin:0;background:radial-gradient(ellipse at 55% -10%,#1c3c5e 0,transparent 52%),#07121e;min-height:100dvh}
-main{max-width:860px;margin:auto;padding:24px 16px 50px}
-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:22px}
-h1{margin:3px 0;font-size:1.62rem;letter-spacing:-.03em}h2{font-size:1.06rem;margin:0 0 14px}
-.kicker{font-size:.7rem;letter-spacing:.15em;color:#8ba9c6;font-weight:800}
-small,.muted{color:var(--sub)}
-p{line-height:1.5}
-.card{background:#122238ee;border:1px solid var(--edge);border-radius:20px;padding:22px;margin-bottom:17px}
-.chip{padding:8px 11px;border:1px solid #4d6884;border-radius:100px;font-size:.76rem;white-space:nowrap}
-.chip.good{color:var(--green);border-color:#367f69}.chip.error{color:var(--red);border-color:#a65059}
-.readout{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
-#state{font-weight:800;font-size:1.54rem;overflow-wrap:anywhere}#state.error{color:var(--red)}
-.gauge{height:9px;background:#273e54;border-radius:100px;overflow:hidden;margin:18px 0 10px}
-#progress{width:0;height:100%;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .24s}
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-.metric{background:#0d1b2a;border:1px solid #354a60;border-radius:13px;padding:12px;min-height:78px}
-.metric small{display:block;font-size:.72rem;margin-bottom:7px}
-.metric b{font-size:1.15rem;overflow-wrap:anywhere}
-.actions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-button,select,input{font:inherit}
-button{cursor:pointer;min-height:72px;border-radius:15px;border:1px solid #4f7296;background:#20415e;color:#eaf6ff;font-weight:800;font-size:1.05rem;padding:13px 12px;transition:transform .12s}
-button:active:not(:disabled){transform:scale(.985)}
-button:focus-visible,select:focus-visible{outline:3px solid #82e2bb;outline-offset:3px}
-button:disabled{opacity:.40;cursor:not-allowed}
-button.up{background:#164e42;border-color:#277d68}
-button.down{background:#1b4672;border-color:#346fac}
-button.stop{grid-column:1/-1;background:#6b2730;border-color:#b05e69;min-height:68px}
-button.secondary{background:#1b3048;font-size:.92rem;min-height:59px}
-button.save{background:#73521d;border-color:#ae8748;color:#fff0cf}
-.tag{display:inline-block;padding:5px 9px;border-radius:8px;background:#18364a;font-size:.79rem;color:#cde9ff}
-.note{font-size:.83rem;color:#f3d9ae;border-left:3px solid #b9904d;background:#342d25;padding:10px 12px;border-radius:0 8px 8px 0;line-height:1.45;margin-top:16px}
-.field{display:grid;gap:8px;margin:14px 0}
-.field label{font-size:.88rem;font-weight:700}
-select,input{padding:13px 10px;color:#eaf6ff;border:1px solid #527092;border-radius:11px;background:#0b1a2c;min-height:48px;width:100%}
-details{margin-bottom:15px}summary{cursor:pointer;font-weight:700;font-size:1.02rem;padding:5px 0}
-#message{min-height:24px;font-size:.88rem;color:var(--yellow)}
-footer{font-size:.76rem;color:var(--sub);line-height:1.6;margin:18px 2px}
-@media(max-width:510px){main{padding:16px 12px 35px}.card{padding:16px;border-radius:16px}h1{font-size:1.34rem}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.metric{padding:9px}.metric b{font-size:.98rem}.actions{gap:9px}button{font-size:1rem;min-height:77px}}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Elevador NeoTech Pro</title>
+    <style>
+        body { margin: 0; background: radial-gradient(circle at top, #080014 0%, #04010a 100%); font-family: 'Segoe UI', sans-serif; color: #d9d9ff; text-align: center; padding-bottom: 30px; }
+        h1 { margin-top: 15px; }
+        #elevadorBox { width: 140px; height: 260px; border: 3px solid #673ab7; border-radius: 20px; margin: 15px auto; position: relative; background: rgba(255, 255, 255, 0.03); box-shadow: 0 0 20px #673ab788 inset; }
+        #cabine { width: 100px; height: 60px; background: rgba(0, 234, 255, 0.1); border: 2px solid #00eaff; border-radius: 10px; position: absolute; left: 50%; transform: translateX(-50%); bottom: 10px; transition: bottom 0.5s ease-out; box-shadow: 0 0 15px #00eaff66; }
+        .config-box, #statusBox { width: 280px; margin: 15px auto; padding: 15px; border-radius: 15px; background: rgba(255,255,255,0.05); text-align: left; border: 1px solid #333; box-sizing: border-box; }
+        button { font-size: 16px; padding: 12px; width: 200px; border: none; border-radius: 10px; margin: 5px; cursor: pointer; color: #fff; background: linear-gradient(135deg, #6200ea, #3700b3); font-weight: bold; transition: transform 0.1s; }
+        button:active { transform: scale(0.95); }
+        .stop { background: linear-gradient(135deg, #ff1744, #b20000); height: 70px; font-size: 18px; }
+        .save { background: #00b8d4; width: 100%; margin-top: 15px; }
+        input[type=range], input[type=number] { width: 100%; margin-top: 8px; background: #111; color: #00eaff; border: 1px solid #444; padding: 8px; border-radius: 8px; box-sizing: border-box; accent-color: #00eaff; }
+        .on { color: #00eaff; font-weight: bold; }
+        .off { color: #ff4f6f; }
+        label { font-size: 14px; font-weight: bold; color: #bbb; display: block; margin-top: 10px; }
+    </style>
 </head>
 <body>
-<main>
-<header>
-<div><div class="kicker">ESP32-C3 · CONTROLE DA MAQUETE</div><h1>Elevador</h1></div>
-<div class="chip" id="connection">CONECTANDO</div>
-</header>
-<section class="card">
-<h2>Posição do elevador</h2>
-<div class="readout">
-<div><div id="state" role="status">Sem telemetria</div><small id="description">Aguardando informações do ESP32…</small></div>
-<div class="tag" id="home-indicator">HOME ?</div>
-</div>
-<div class="gauge" role="progressbar" aria-label="Posição estimada" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="gauge"><div id="progress"></div></div>
-<div class="grid">
-<div class="metric"><small>Tempo DESCER</small><b id="minimum">—</b></div><div class="metric"><small>Última subida HOME</small><b id="last-home">—</b></div>
-<div class="metric"><small>Descida atual</small><b id="elapsed">—</b></div>
-<div class="metric"><small>Tempo SUBIR</small><b id="countdown">—</b></div>
-<div class="metric"><small>Retorno automático</small><b id="return-countdown">—</b></div>
-</div>
-</section>
-<section class="card">
-<h2>Controle</h2>
-<div class="actions">
-<button type="button" class="up" id="up" disabled>↑ SUBIR</button>
-<button type="button" class="down" id="down" disabled>↓ DESCER</button>
-<button type="button" class="stop" id="stop" disabled>■ PARAR</button>
-<button type="button" class="secondary" id="home" disabled>⌂ ENCONTRAR HOME</button>
+    <h1>🚀 NeoTech Pro</h1>
+    
+    <div id="elevadorBox"><div id="cabine"></div></div>
 
-</div>
-<div class="note" id="help">DESCER executa o tempo configurado, aguarda 10 segundos no mínimo e retorna automaticamente até HOME. PARAR cancela o retorno.</div>
-</section>
-<section class="card">
-<h2>Tempos de movimento</h2>
-<p class="muted">Defina os tempos manuais de SUBIR e DESCER. Ao concluir DESCER, o elevador aguarda 10 segundos e retorna automaticamente até o sensor HOME (com timeout de proteção). Não precisa calibrar.</p>
-<div class="actions">
-<div class="field"><label for="up-time">SUBIR (segundos)</label>
-<input id="up-time" type="number" inputmode="decimal" min="0.5" max="20" step="0.1" value="3"></div>
-<div class="field"><label for="down-time">DESCER (segundos)</label>
-<input id="down-time" type="number" inputmode="decimal" min="0.5" max="20" step="0.1" value="3"></div>
-</div>
-<button type="button" id="save-times" class="secondary" style="width:100%">Salvar tempos de movimento</button>
-<p class="muted" style="font-size:.83rem">Faixa: 0,5 a 20 segundos (limitada também pelos timeouts do firmware). A configuração fica salva após reiniciar.</p>
-</section>
-<section class="card">
-<details>
-<summary>Configurações salvas no ESP32</summary>
-<p class="muted" style="font-size:.84rem">Modificar o sentido ou a polaridade invalida o mínimo gravado. Só é permitido salvar sem movimento. Depois, encontre HOME e calibre novamente.</p>
-<div class="field"><label for="direction">Sentido de rotação para SUBIR</label>
-<select id="direction">
-<option value="1">GPIO3 = HIGH · GPIO4 = LOW</option>
-<option value="0">GPIO3 = LOW · GPIO4 = HIGH (invertido)</option>
-</select></div>
-<div class="field"><label for="polarity">Sensor superior HOME</label>
-<select id="polarity">
-<option value="1">Ativo HIGH · NC para GND (padrão)</option>
-<option value="0">Ativo LOW · NO para GND</option>
-</select></div>
-<button type="button" id="save-settings" class="secondary" style="width:100%" disabled>Salvar configurações na memória</button>
-</details>
-<div id="message" role="status"></div>
-</section>
-<footer>
-<p>Wi-Fi local: <strong>Elevador</strong> · Acesso: <strong>http://192.168.4.1/</strong>. Interface única, sem internet.</p>
-<p><strong>Atenção:</strong> comandos web fazem o motor se mover de verdade após habilitação de segurança no firmware. O botão PARAR solicita frenagem IN1=IN2=0, mas não desliga a potência independentemente. Com um só fim de curso, o limite inferior por tempo pode derivar devido à carga, à alimentação ou ao travamento do motor. Use proteção mecânica e desligamento independente.</p>
-</footer>
-</main>
-<script>
-'use strict';
-const $=id=>document.getElementById(id);
-const names={UNKNOWN:'POSIÇÃO DESCONHECIDA',HOME:'NO HOME',CAL_READY:'CALIBRAÇÃO PRONTA',HOMING:'SUBINDO PARA HOME',HOME_VERIFY:'VERIFICANDO HOME',CAL_DOWN:'CALIBRANDO DESCIDA',SAVING_MIN:'GRAVANDO MÍNIMO',DOWN:'DESCENDO',MIN:'NO MÍNIMO',FAULT:'FALHA — MOTOR BLOQUEADO'};
-const ui={ready:false,busy:false,state:'UNKNOWN',online:false,settingsLoaded:false,timingLoaded:false,up_ms:3000,down_ms:3000,settings:{up_in1_high:1,home_active_level:1}};
-const time=ms=>ms>0?(ms/1000).toFixed(2)+' s':'—';
-function hint(message){$('message').textContent=message;}
-function enable(id,on){$(id).disabled=!on||(id!=='stop'&&ui.busy);}
-function display(s){
- if(!s||!Object.hasOwn(names,s.state)||!s.settings||
-    !Number.isFinite(s.up_ms)||!Number.isFinite(s.down_ms))throw Error('Telemetria inválida');
- ui.state=s.state;ui.ready=!!s.ready;ui.online=true;
- $('connection').textContent=s.ready?'CONECTADO':'BLOQUEADO';
- $('connection').className='chip '+(s.ready?'good':'error');
- $('state').textContent=names[s.state];
- $('state').className=s.state==='FAULT'?'error':'';
- $('description').textContent=s.fault?('Motivo: '+s.fault):s.ready?'Controle disponível':'Verifique as proteções físicas, o menuconfig e a senha do AP';
- $('home-indicator').textContent=s.top_active?'HOME ATIVO':'HOME LIVRE';
- $('minimum').textContent=time(s.down_ms);
- $('last-home').textContent=time(s.last_home_ms||0);
- $('elapsed').textContent=time(s.elapsed_ms);
- $('countdown').textContent=time(s.up_ms);
- $('return-countdown').textContent=s.state==='MIN'?time(s.return_wait_ms):'—';
- const pct=s.position_pct>=0?Math.min(100,s.position_pct):0;
- $('progress').style.width=pct+'%';$('gauge').setAttribute('aria-valuenow',String(pct));
- $('gauge').setAttribute('aria-valuetext',s.position_pct<0?'Posição desconhecida':pct+'% do curso estimado');
- enable('stop',true);
- const ready=s.ready;
- enable('home',ready&&['UNKNOWN','MIN','HOME'].includes(s.state));
- enable('up',ready&&['UNKNOWN','MIN'].includes(s.state)&&!s.top_active);
- enable('down',ready&&s.top_active&&s.state==='HOME');
- enable('save-settings',s.online!==false&&['HOME','UNKNOWN','FAULT'].includes(s.state)&&!s.settings.saving);
- enable('save-times',s.online!==false&&['HOME','UNKNOWN','MIN'].includes(s.state)&&!s.settings.saving);
- if(!ui.timingLoaded && !s.settings.saving) {
-  ui.timingLoaded=true;
-  $('up-time').value=String(s.up_ms/1000);
-  $('down-time').value=String(s.down_ms/1000);
- }
- ui.up_ms=s.up_ms;ui.down_ms=s.down_ms;
- if(!ui.settingsLoaded&&!s.settings.saving){
-  ui.settingsLoaded=true;
-  $('direction').value=String(s.settings.up_in1_high);
-  $('polarity').value=String(s.settings.home_active_level);
- }
- $('help').textContent=s.state==='HOME'?'HOME ativo. DESCER disponível pelo tempo salvo.':
- s.state==='MIN'?'No limite inferior. Retorno automático ao HOME em '+time(s.return_wait_ms)+'. PARAR cancela.':
- s.state==='UNKNOWN'?'Posição desconhecida. SUBIR disponível por tempo até HOME.':
- s.state==='FAULT'?'Falha detectada. Verifique a causa antes de movimentar.':
- s.state==='DOWN'?'Descendo pelo tempo configurado. PARAR interrompe.':
- s.state==='HOMING'?'Subindo até HOME (retorno automático/busca) ou pelo tempo configurado (SUBIR manual).':
- 'Controle manual por tempos independentes.';
-}
-function offline(message){
- ui.online=false;ui.ready=false;ui.state='UNKNOWN';$('connection').textContent='SEM CONEXÃO';
- $('connection').className='chip error';$('state').textContent='SEM TELEMETRIA';
- $('description').textContent=message;
- for(const id of ['up','down','stop','home','save-times','save-settings'])$(id).disabled=true;
- $('progress').style.width='0%';$('home-indicator').textContent='HOME ?';
-}
-async function send(path,body){
- const isStop=path==='/api/stop';
- if((ui.busy&&!isStop)||!ui.online)return;
- if(!isStop)ui.busy=true;
- try{
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2000);
-  let response;
-  try{
-   response=await fetch(path,{method:'POST',cache:'no-store',
-    headers:body?{'Content-Type':'application/x-www-form-urlencoded'}:{},
-    body:body||undefined,signal:controller.signal});
-  }finally{clearTimeout(timer);}
-  const data=await response.json();
-  if(!response.ok||!data.accepted)throw Error(data.error||'intertravamento');
-  hint('Comando aceito. Aguardando confirmação de estado…');
-  if(path==='/api/settings')ui.settingsLoaded=false;
-  if(path==='/api/times')ui.timingLoaded=false;
- }catch(e){hint('Comando recusado: '+e.message);}
- finally{if(!isStop)ui.busy=false;}
-}
-for(const [id,action] of [['home','home'],['up','up'],['down','down'],
- ['stop','stop']]){
- $(id).addEventListener('click',()=>void send('/api/'+action));
-}
-$('save-times').addEventListener('click',()=>{
- const up=Math.round(Number($('up-time').value)*1000);
- const down=Math.round(Number($('down-time').value)*1000);
- if(!Number.isFinite(up)||!Number.isFinite(down)||up<500||down<500||up>20000||down>20000){
-  hint('Informe tempos entre 0,5 e 20 segundos.');return;
- }
- if(up===ui.up_ms&&down===ui.down_ms){hint('Tempos já estão salvos.');return;}
- void send('/api/times','up_ms='+up+'&down_ms='+down);
-});
-$('save-settings').addEventListener('click',()=>{
- const a=+$('direction').value,b=+$('polarity').value;
- if(a===ui.settings.up_in1_high&&b===ui.settings.home_active_level){hint('Nenhuma mudança para salvar.');return;}
- if(!window.confirm('Alterar os sinais invalida o mínimo gravado e exige nova busca HOME e calibração. Continuar?'))return;
- void send('/api/settings','up_in1='+a+'&top_active='+b);
-});
-async function poll(){
- const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1500);
- try{
-  const response=await fetch('/api/status',{cache:'no-store',signal:controller.signal});
-  if(!response.ok)throw Error('HTTP '+response.status);
-  const data=await response.json();display(data);
-  ui.settings=data.settings;
- }catch(e){offline('ESP32 indisponível: '+e.message);}
- finally{clearTimeout(timeout);}
- setTimeout(poll,350);
-}
-window.addEventListener('pagehide',()=>{
- if(['DOWN','CAL_DOWN','HOMING','MIN'].includes(ui.state))
-  void fetch('/api/stop',{method:'POST',keepalive:true}).catch(()=>{});
-});
-poll();
-</script>
+    <button onclick='cmd("up")'>🔼 SUBIR (HOME)</button><br>
+    <button onclick='cmd("down")'>🔽 DESCER (TEMPO)</button><br>
+    <button class="stop" onclick='cmd("stop")'>⏹️ PARAR</button>
+    
+    <div class="config-box">
+        <label>Velocidade PWM (80 - 255): <span id="velVal" class="on">200</span></label>
+        <input type="range" id="speed" min="80" max="255" value="200" oninput="document.getElementById('velVal').innerText=this.value">
+        
+        <label>Tempo de Descida (ms):</label>
+        <input type="number" id="time" min="500" max="20000" value="3000">
+
+        <button class="save" onclick="saveSettings()">💾 Salvar Configurações</button>
+    </div>
+
+    <div id="statusBox">
+        <div id="motorTxt">Motor: --</div>
+        <div id="cimaTxt">Fim Superior (HOME): --</div>
+        <div id="posTxt">Posição Estimada: --</div>
+    </div>
+    
+    <script>
+        function cmd(action) { fetch('/api/' + action, { method: 'POST' }); }
+        
+        function saveSettings() {
+            const v = document.getElementById('speed').value;
+            const t = document.getElementById('time').value;
+            fetch(`/api/settings?v=${v}&t=${t}`, { method: 'POST' });
+        }
+
+        setInterval(() => {
+            fetch('/api/status').then(r => r.json()).then(data => {
+                // Atualiza Textos
+                document.getElementById("motorTxt").innerHTML = "Motor: " + (data.state !== "IDLE" ? `<span class='on'>${data.state}</span>` : "<span class='off'>PARADO</span>");
+                document.getElementById("cimaTxt").innerHTML = "Fim Superior: " + (data.home_active ? "<span class='on'>ATIVADO</span>" : "<span class='off'>LIVRE</span>");
+                document.getElementById("posTxt").innerHTML = `Deslocamento: <span class='on'>${data.elapsed_ms} ms</span>`;
+                
+                // Animação da Cabine baseada no tempo
+                let cab = document.getElementById("cabine");
+                if (data.home_active) {
+                    cab.style.bottom = "190px";
+                } else if (data.state === "DOWN" || data.state === "IDLE") {
+                    // Calcula a altura da cabine baseado no tempo decorrido (10px até 190px)
+                    let pct = 1 - (data.elapsed_ms / data.descent_time);
+                    if (pct < 0) pct = 0; if (pct > 1) pct = 1;
+                    cab.style.bottom = (10 + (pct * 180)) + "px";
+                }
+            }).catch(e => {});
+        }, 300);
+    </script>
 </body>
 </html>
